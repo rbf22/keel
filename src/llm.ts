@@ -11,13 +11,71 @@ export async function checkWebGPU() {
   return true;
 }
 
-export const SELECTED_MODEL = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+export async function detectBestModel(): Promise<string> {
+  try {
+    const memory = (navigator as any).deviceMemory; // in GB
+    const gpu = (navigator as any).gpu;
+    if (!gpu) return DEFAULT_MODEL_ID;
+
+    const adapter = await gpu.requestAdapter();
+    if (!adapter) return DEFAULT_MODEL_ID;
+
+    const limits = adapter.limits;
+    // Llama 3.2 3B typically requires larger buffer bindings.
+    // We can check maxStorageBufferBindingSize.
+    // 1GB = 1024 * 1024 * 1024 bytes.
+    const hasEnoughGpuMemory = limits.maxStorageBufferBindingSize >= 1 * 1024 * 1024 * 1024;
+
+    // Check for Llama 3.2 3B requirement (~2.3 GB VRAM)
+    // We heuristic: if system memory is >= 8GB and adapter has reasonable limits
+    if (memory && memory >= 8 && hasEnoughGpuMemory) {
+      return "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+    }
+
+    // Fallback to Llama 3.2 1B if we have at least some memory info or just as a better-than-smol default
+    if (memory && memory >= 4) {
+      return "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+    }
+
+    return DEFAULT_MODEL_ID;
+  } catch (e) {
+    return DEFAULT_MODEL_ID;
+  }
+}
+
+export interface ModelInfo {
+  modelId: string;
+  displayName: string;
+  vramRequiredMB?: number;
+}
+
+export const SUPPORTED_MODELS: ModelInfo[] = [
+  {
+    modelId: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+    displayName: "Llama 3.2 3B",
+    vramRequiredMB: 2300,
+  },
+  {
+    modelId: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+    displayName: "Llama 3.2 1B",
+    vramRequiredMB: 900,
+  },
+  {
+    modelId: "SmolLM2-360M-Instruct-q4f16_1-MLC",
+    displayName: "SmolLM2 360M",
+    vramRequiredMB: 400,
+  },
+];
+
+export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
 
 export class LLMEngine {
   private engine: webllm.MLCEngineInterface | null = null;
   private onUpdate: (message: string) => void;
+  private modelId: string;
 
-  constructor(onUpdate: (message: string) => void) {
+  constructor(modelId: string, onUpdate: (message: string) => void) {
+    this.modelId = modelId;
     this.onUpdate = onUpdate;
   }
 
@@ -26,8 +84,7 @@ export class LLMEngine {
     await checkWebGPU();
 
     this.onUpdate("Initializing Engine...");
-    // Use the lowercase createMLCEngine as per latest web-llm docs/type exports
-    this.engine = await webllm.CreateMLCEngine(SELECTED_MODEL, {
+    this.engine = await webllm.CreateMLCEngine(this.modelId, {
       initProgressCallback: (report: webllm.InitProgressReport) => {
         this.onUpdate(`Loading: ${report.text}`);
       },
