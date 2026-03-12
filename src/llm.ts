@@ -11,7 +11,7 @@ export async function checkWebGPU() {
   return true;
 }
 
-export const SELECTED_MODEL = "SmolLM2-135M-Instruct-q4f16_1-MLC";
+export const SELECTED_MODEL = "SmolLM2-360M-Instruct-q4f16_1-MLC";
 
 export class LLMEngine {
   private engine: webllm.MLCEngineInterface | null = null;
