@@ -91,11 +91,39 @@ export class LLMEngine {
     });
   }
 
-  async generate(prompt: string, onToken: (text: string) => void) {
+  async generate(prompt: string, onToken: (text: string) => void, history: webllm.ChatCompletionMessageParam[] = []) {
     if (!this.engine) throw new Error("Engine not initialized");
 
+    const systemPrompt = `You are Keel, a local-first AI agent for iPad.
+You have access to a Python execution environment for data analysis and visualization.
+When you need to perform calculations, process data, or create charts, write a Python script in a triple-backtick block starting with \`\`\`python.
+
+The environment has 'pandas' and 'numpy' pre-installed.
+You MUST use the following helper functions for output:
+- display_table(df): To show a pandas DataFrame as a table.
+- display_chart(spec): To show a Vega-Lite chart. The spec should be a dictionary.
+- download_file(filename, content): To provide a downloadable file.
+- log(message): To print text to the output panel.
+
+Example for a chart:
+\`\`\`python
+import pandas as pd
+df = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
+display_chart({
+    "mark": "line",
+    "encoding": {
+        "x": {"field": "x", "type": "quantitative"},
+        "y": {"field": "y", "type": "quantitative"}
+    },
+    "data": {"values": df.to_dict(orient='records')}
+})
+\`\`\`
+
+All Python code you write will be executed automatically. Use it whenever it helps answer the user's request.`;
+
     const messages: webllm.ChatCompletionMessageParam[] = [
-      { role: "system", content: "You are a helpful assistant running locally on an iPad." },
+      { role: "system", content: systemPrompt },
+      ...history,
       { role: "user", content: prompt },
     ];
 

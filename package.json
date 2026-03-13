@@ -9,7 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@mlc-ai/web-llm": "^0.2.81"
+    "@mlc-ai/web-llm": "^0.2.81",
+    "pyodide": "^0.26.0",
+    "vega": "^6.2.0",
+    "vega-embed": "^7.1.0",
+    "vega-lite": "^6.4.2"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.69",
