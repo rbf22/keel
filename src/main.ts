@@ -109,7 +109,7 @@ let logsInitialized = false;
 logger.subscribe((entry: LogEntry) => {
   if (!debugLogsEl) return;
   if (!logsInitialized) {
-    debugLogsEl.innerHTML = '';
+    debugLogsEl.textContent = '';
     logsInitialized = true;
   }
 
@@ -167,10 +167,10 @@ copyLogsBtn.onclick = () => {
   }).join('\n\n');
 
   navigator.clipboard.writeText(logText).then(() => {
-    const originalText = copyLogsBtn.innerText;
-    copyLogsBtn.innerText = 'Copied!';
+    const originalText = copyLogsBtn.textContent;
+    copyLogsBtn.textContent = 'Copied!';
     setTimeout(() => {
-      copyLogsBtn.innerText = originalText;
+      copyLogsBtn.textContent = originalText;
     }, 2000);
   }).catch(err => {
     console.error('Failed to copy logs: ', err);
@@ -193,32 +193,36 @@ initModelSelection();
 function addMessage(text: string, role: 'user' | 'assistant') {
   const div = document.createElement('div')
   div.className = `message ${role}-message`
-  div.innerText = text
+  div.textContent = text
   messagesEl.appendChild(div)
   messagesEl.scrollTop = messagesEl.scrollHeight
   return div
 }
 
 function clearPythonOutput() {
-  pythonOutputEl.innerHTML = '';
+  pythonOutputEl.textContent = '';
 }
 
 function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = pythonOutputEl) {
   if (output.type === 'ready') {
-    pythonStatusEl.innerText = 'Ready';
-    targetEl.innerHTML = '<div class="output-log">Python runtime ready.</div>';
+    pythonStatusEl.textContent = 'Ready';
+    targetEl.textContent = '';
+    const readyDiv = document.createElement('div');
+    readyDiv.className = 'output-log';
+    readyDiv.textContent = 'Python runtime ready.';
+    targetEl.appendChild(readyDiv);
     return;
   }
 
   if (output.type === 'log') {
     const logDiv = document.createElement('div');
     logDiv.className = 'output-log';
-    logDiv.innerText = output.message || '';
+    logDiv.textContent = output.message || '';
     targetEl.appendChild(logDiv);
   } else if (output.type === 'error') {
     const errDiv = document.createElement('div');
     errDiv.className = 'output-error';
-    errDiv.innerText = output.message || '';
+    errDiv.textContent = output.message || '';
     targetEl.appendChild(errDiv);
   } else if (output.type === 'table' && output.data) {
     const container = document.createElement('div');
@@ -231,7 +235,7 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
       const headerRow = document.createElement('tr');
       keys.forEach(key => {
         const th = document.createElement('th');
-        th.innerText = key;
+        th.textContent = key;
         headerRow.appendChild(th);
       });
       thead.appendChild(headerRow);
@@ -242,7 +246,7 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
         const tr = document.createElement('tr');
         keys.forEach(key => {
           const td = document.createElement('td');
-          td.innerText = row[key];
+          td.textContent = String(row[key]);
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -262,7 +266,7 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
     const blob = new Blob([output.content], { type: 'text/plain' });
     link.href = URL.createObjectURL(blob);
     link.download = output.filename;
-    link.innerText = `Download ${output.filename}`;
+    link.textContent = `Download ${output.filename}`;
     targetEl.appendChild(link);
   }
 
@@ -277,8 +281,8 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
 initBtn.onclick = async () => {
   initBtn.disabled = true
   modelSelect.disabled = true
-  statusEl.innerText = "Initializing LLM..."
-  pythonStatusEl.innerText = "Initializing..."
+  statusEl.textContent = "Initializing LLM..."
+  pythonStatusEl.textContent = "Initializing..."
 
   const selectedModelId = modelSelect.value;
   localStorage.setItem('selectedModelId', selectedModelId);
@@ -290,21 +294,21 @@ initBtn.onclick = async () => {
     const pythonPromise = python.init();
 
     engine = new LLMEngine(selectedModelId, (msg) => {
-      statusEl.innerText = msg
+      statusEl.textContent = msg
     })
     const enginePromise = engine.init();
 
     await Promise.all([pythonPromise, enginePromise]);
 
     logger.info('system', 'Initialization successful');
-    statusEl.innerText = "Keel Ready (WebGPU + Python)"
+    statusEl.textContent = "Keel Ready (WebGPU + Python)"
     userInput.disabled = false
     sendBtn.disabled = false
     initBtn.style.display = 'none'
     modelSelectContainer.style.display = 'none'
   } catch (err: any) {
     logger.error('system', `Initialization failed: ${err.message}`, { error: err });
-    statusEl.innerText = `Error: ${err.message}`
+    statusEl.textContent = `Error: ${err.message}`
     initBtn.disabled = false
     modelSelect.disabled = false
   }
@@ -314,11 +318,20 @@ async function handleSend(overrideText?: string, retryCount = 0) {
   const text = overrideText || userInput.value.trim()
   if (!text || !engine || !python) return
 
+  // Prevent deep recursion
+  if (retryCount > 2) {
+    addMessage("I'm stuck and couldn't fix the Python error after multiple attempts.", 'assistant');
+    userInput.disabled = false;
+    sendBtn.disabled = false;
+    return;
+  }
+
   userInput.disabled = true;
   sendBtn.disabled = true;
 
   if (overrideText) {
     chatHistory.push({ role: 'user', content: text });
+    // In override/recovery mode, the message is already added to UI by the caller
   } else {
     userInput.value = ''
     addMessage(text, 'user')
@@ -334,7 +347,7 @@ async function handleSend(overrideText?: string, retryCount = 0) {
     let fullText = "";
     await engine.generate(text, (updatedText) => {
       fullText = updatedText;
-      assistantDiv.innerText = fullText
+      assistantDiv.textContent = fullText
       messagesEl.scrollTop = messagesEl.scrollHeight
     }, chatHistory.slice(0, -1)); // History without the current message as generate adds it
 
@@ -357,25 +370,24 @@ async function handleSend(overrideText?: string, retryCount = 0) {
       };
 
       for (const code of codeBlocks) {
-        pythonStatusEl.innerText = 'Running...';
+        pythonStatusEl.textContent = 'Running...';
         try {
           // Temporarily swap handler to capture output inline and in tab
           (python as any).onOutput = dualPythonHandler;
 
           await python.execute(code);
-          pythonStatusEl.innerText = 'Ready';
+          pythonStatusEl.textContent = 'Ready';
         } catch (err: any) {
-          pythonStatusEl.innerText = 'Error';
+          pythonStatusEl.textContent = 'Error';
           // Errors are already handled via handlePythonOutput (inline)
 
           // Automatic error recovery
-          if (retryCount < 2) {
-            // Restore handler before recursive call
-            (python as any).onOutput = originalHandler;
+          // Restore handler before potential recursive call
+          (python as any).onOutput = originalHandler;
 
-            const logs = logger.getLogs().slice(-10); // Last 10 logs for context
-            const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
-            const recoveryPrompt = `The previous Python code failed with the following error:
+          const logs = logger.getLogs().slice(-10); // Last 10 logs for context
+          const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
+          const recoveryPrompt = `The previous Python code failed with the following error:
 \`\`\`
 ${err.message}
 \`\`\`
@@ -387,10 +399,12 @@ ${logContext}
 
 Please analyze the error and provide a corrected version of the code.`;
 
-            addMessage(recoveryPrompt, 'user');
-            await handleSend(recoveryPrompt, retryCount + 1);
-          }
-          break; // Stop executing further blocks if one fails
+          addMessage(recoveryPrompt, 'user');
+          // Restore handler before potential recursive call
+          (python as any).onOutput = originalHandler;
+          // Use setTimeout to avoid synchronous recursion which might cause stack issues or interference with WebLLM state
+          setTimeout(() => handleSend(recoveryPrompt, retryCount + 1), 0);
+          return; // Exit current handleSend and skip the finally re-enabling logic
         } finally {
           (python as any).onOutput = originalHandler;
         }
@@ -398,14 +412,18 @@ Please analyze the error and provide a corrected version of the code.`;
     }
 
     const stats = await engine.getStats()
-    if (stats) statsEl.innerText = stats
+    if (stats) statsEl.textContent = stats
   } catch (err: any) {
-    assistantDiv.innerText = `Error: ${err.message}`
+    assistantDiv.textContent = `Error: ${err.message}`
   } finally {
     if (retryCount === 0) {
-      userInput.disabled = false;
-      sendBtn.disabled = false;
-      userInput.focus();
+      // Re-enable input only if it's the top-level call and we are not recovering
+      // Wait a bit to ensure all state is updated
+      setTimeout(() => {
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+        userInput.focus();
+      }, 100);
     }
   }
 }

@@ -104,10 +104,12 @@ When you need to perform calculations, process data, or create charts, write a P
 
 The environment has 'pandas' and 'numpy' pre-installed.
 You MUST use the following helper functions for output:
-- display_table(df): To show a pandas DataFrame as a table.
+- display_table(df): To show a pandas DataFrame as a table. It accepts EXACTLY ONE argument.
 - display_chart(spec): To show a Vega-Lite chart. The spec should be a dictionary.
 - download_file(filename, content): To provide a downloadable file.
 - log(message): To print text to the output panel.
+
+If the user provides an error message from a previous execution, analyze it carefully and provide a corrected version of the code that addresses the root cause.
 
 Example for a chart:
 \`\`\`python
