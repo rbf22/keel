@@ -36,7 +36,12 @@ app.innerHTML = `
         </div>
 
         <div class="output-content" id="debugLogs" data-tab-content="logs" style="display: none;">
-          <div class="output-log">Debug logs will appear here.</div>
+          <div class="logs-header">
+            <button id="copyLogsBtn">Copy Logs</button>
+          </div>
+          <div id="logsContainer" class="logs-container">
+            <div class="output-log">Debug logs will appear here.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -64,7 +69,8 @@ const userInput = document.getElementById('userInput')! as HTMLInputElement
 const sendBtn = document.getElementById('sendBtn')! as HTMLButtonElement
 const initBtn = document.getElementById('initBtn')! as HTMLButtonElement
 const statsEl = document.getElementById('stats')!
-const debugLogsEl = document.getElementById('debugLogs')!
+const debugLogsEl = document.getElementById('logsContainer')!
+const copyLogsBtn = document.getElementById('copyLogsBtn')! as HTMLButtonElement
 const logNotificationEl = document.getElementById('logNotification')!
 
 // Tab switching logic
@@ -101,6 +107,7 @@ let chatHistory: any[] = []
 // Subscribe to logs
 let logsInitialized = false;
 logger.subscribe((entry: LogEntry) => {
+  if (!debugLogsEl) return;
   if (!logsInitialized) {
     debugLogsEl.innerHTML = '';
     logsInitialized = true;
@@ -146,6 +153,31 @@ logger.subscribe((entry: LogEntry) => {
   }
 });
 
+copyLogsBtn.onclick = () => {
+  const logs = logger.getLogs();
+  const logText = logs.map(entry => {
+    const timestamp = new Date(entry.timestamp).toISOString();
+    const category = entry.category.toUpperCase();
+    const level = entry.level.toUpperCase();
+    let text = `[${timestamp}] [${category}] [${level}] ${entry.message}`;
+    if (entry.data) {
+      text += `\nData: ${JSON.stringify(entry.data, null, 2)}`;
+    }
+    return text;
+  }).join('\n\n');
+
+  navigator.clipboard.writeText(logText).then(() => {
+    const originalText = copyLogsBtn.innerText;
+    copyLogsBtn.innerText = 'Copied!';
+    setTimeout(() => {
+      copyLogsBtn.innerText = originalText;
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy logs: ', err);
+    alert('Failed to copy logs to clipboard');
+  });
+};
+
 async function initModelSelection() {
   const savedModelId = localStorage.getItem('selectedModelId');
   if (savedModelId && SUPPORTED_MODELS.some(m => m.modelId === savedModelId)) {
@@ -171,10 +203,10 @@ function clearPythonOutput() {
   pythonOutputEl.innerHTML = '';
 }
 
-function handlePythonOutput(output: PythonOutput) {
+function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = pythonOutputEl) {
   if (output.type === 'ready') {
     pythonStatusEl.innerText = 'Ready';
-    pythonOutputEl.innerHTML = '<div class="output-log">Python runtime ready.</div>';
+    targetEl.innerHTML = '<div class="output-log">Python runtime ready.</div>';
     return;
   }
 
@@ -182,12 +214,12 @@ function handlePythonOutput(output: PythonOutput) {
     const logDiv = document.createElement('div');
     logDiv.className = 'output-log';
     logDiv.innerText = output.message || '';
-    pythonOutputEl.appendChild(logDiv);
+    targetEl.appendChild(logDiv);
   } else if (output.type === 'error') {
     const errDiv = document.createElement('div');
     errDiv.className = 'output-error';
     errDiv.innerText = output.message || '';
-    pythonOutputEl.appendChild(errDiv);
+    targetEl.appendChild(errDiv);
   } else if (output.type === 'table' && output.data) {
     const container = document.createElement('div');
     container.className = 'data-table-container';
@@ -218,11 +250,11 @@ function handlePythonOutput(output: PythonOutput) {
       table.appendChild(tbody);
     }
     container.appendChild(table);
-    pythonOutputEl.appendChild(container);
+    targetEl.appendChild(container);
   } else if (output.type === 'chart' && output.spec) {
     const chartDiv = document.createElement('div');
     chartDiv.className = 'chart-container';
-    pythonOutputEl.appendChild(chartDiv);
+    targetEl.appendChild(chartDiv);
     embed(chartDiv, output.spec, { actions: false });
   } else if (output.type === 'download' && output.filename && output.content) {
     const link = document.createElement('a');
@@ -231,10 +263,15 @@ function handlePythonOutput(output: PythonOutput) {
     link.href = URL.createObjectURL(blob);
     link.download = output.filename;
     link.innerText = `Download ${output.filename}`;
-    pythonOutputEl.appendChild(link);
+    targetEl.appendChild(link);
   }
 
-  pythonOutputEl.scrollTop = pythonOutputEl.scrollHeight;
+  targetEl.scrollTop = targetEl.scrollHeight;
+  if (targetEl === pythonOutputEl) {
+    pythonOutputEl.scrollTop = pythonOutputEl.scrollHeight;
+  } else {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
 }
 
 initBtn.onclick = async () => {
@@ -273,15 +310,25 @@ initBtn.onclick = async () => {
   }
 }
 
-async function handleSend() {
-  const text = userInput.value.trim()
+async function handleSend(overrideText?: string, retryCount = 0) {
+  const text = overrideText || userInput.value.trim()
   if (!text || !engine || !python) return
 
-  userInput.value = ''
-  addMessage(text, 'user')
-  chatHistory.push({ role: 'user', content: text });
+  userInput.disabled = true;
+  sendBtn.disabled = true;
+
+  if (overrideText) {
+    chatHistory.push({ role: 'user', content: text });
+  } else {
+    userInput.value = ''
+    addMessage(text, 'user')
+    chatHistory.push({ role: 'user', content: text });
+  }
 
   const assistantDiv = addMessage('...', 'assistant')
+  const artifactContainer = document.createElement('div');
+  artifactContainer.className = 'artifact-container';
+  assistantDiv.after(artifactContainer);
 
   try {
     let fullText = "";
@@ -303,14 +350,49 @@ async function handleSend() {
 
     if (codeBlocks.length > 0) {
       clearPythonOutput();
+      const originalHandler = (python as any).onOutput;
+      const dualPythonHandler = (output: PythonOutput) => {
+        handlePythonOutput(output, artifactContainer); // Chat
+        handlePythonOutput(output, pythonOutputEl);    // Python Tab
+      };
+
       for (const code of codeBlocks) {
         pythonStatusEl.innerText = 'Running...';
         try {
+          // Temporarily swap handler to capture output inline and in tab
+          (python as any).onOutput = dualPythonHandler;
+
           await python.execute(code);
           pythonStatusEl.innerText = 'Ready';
         } catch (err: any) {
           pythonStatusEl.innerText = 'Error';
-          // Errors are already handled via handlePythonOutput
+          // Errors are already handled via handlePythonOutput (inline)
+
+          // Automatic error recovery
+          if (retryCount < 2) {
+            // Restore handler before recursive call
+            (python as any).onOutput = originalHandler;
+
+            const logs = logger.getLogs().slice(-10); // Last 10 logs for context
+            const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
+            const recoveryPrompt = `The previous Python code failed with the following error:
+\`\`\`
+${err.message}
+\`\`\`
+
+Recent system logs:
+\`\`\`
+${logContext}
+\`\`\`
+
+Please analyze the error and provide a corrected version of the code.`;
+
+            addMessage(recoveryPrompt, 'user');
+            await handleSend(recoveryPrompt, retryCount + 1);
+          }
+          break; // Stop executing further blocks if one fails
+        } finally {
+          (python as any).onOutput = originalHandler;
         }
       }
     }
@@ -319,10 +401,16 @@ async function handleSend() {
     if (stats) statsEl.innerText = stats
   } catch (err: any) {
     assistantDiv.innerText = `Error: ${err.message}`
+  } finally {
+    if (retryCount === 0) {
+      userInput.disabled = false;
+      sendBtn.disabled = false;
+      userInput.focus();
+    }
   }
 }
 
-sendBtn.onclick = handleSend
+sendBtn.onclick = () => handleSend()
 userInput.onkeypress = (e) => {
   if (e.key === 'Enter') handleSend()
 }

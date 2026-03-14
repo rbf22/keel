@@ -187,8 +187,22 @@ button:disabled {
 
 #pythonOutput.output-content,
 #debugLogs.output-content {
+  padding: 0;
+  gap: 0;
+}
+
+.logs-header {
+  padding: 0.5rem 1rem;
+  background: #222;
+  border-bottom: 1px solid #333;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.logs-container {
   padding: 1rem;
-  gap: 1rem;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .output-content.active {
@@ -278,6 +292,37 @@ th {
   padding: 0.4rem 0.8rem;
   border-radius: 4px;
   border: 1px solid #444;
+}
+
+/* Artifacts in Chat */
+.artifact-container {
+  margin-top: 0.5rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 90%;
+  align-self: flex-start;
+}
+
+.artifact-container .data-table-container {
+  background: #111;
+}
+
+.artifact-container .chart-container {
+  background: white;
+}
+
+.artifact-container .output-log {
+  font-size: 0.8rem;
+  background: #111;
+  padding: 0.5rem;
+  border-radius: 4px;
+  border-left: 3px solid #007aff;
+}
+
+.artifact-container .output-error {
+  font-size: 0.8rem;
 }
 
 @media (prefers-color-scheme: light) {

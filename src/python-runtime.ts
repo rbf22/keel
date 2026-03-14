@@ -11,7 +11,7 @@ export interface PythonOutput {
 
 export class PythonRuntime {
   private worker: Worker | null = null;
-  private onOutput: (output: PythonOutput) => void;
+  public onOutput: (output: PythonOutput) => void;
   private isReady = false;
   private executionTimeout = 10000; // 10 seconds
 
