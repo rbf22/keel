@@ -15,14 +15,16 @@ async function init() {
 import json
 from js import postMessage
 
-def display_table(df):
+def display_table(df, *args):
+    if args:
+        log(f"Warning: display_table received extra arguments: {args}. It only expects a single pandas DataFrame.")
     # Convert dataframe to JSON records
     try:
         if hasattr(df, 'to_json'):
             data = df.to_json(orient="records")
             postMessage(json.dumps({"type": "table", "data": json.loads(data)}))
         else:
-            postMessage(json.dumps({"type": "log", "message": "display_table expected a pandas DataFrame"}))
+            postMessage(json.dumps({"type": "log", "message": f"display_table expected a pandas DataFrame, got {type(df).__name__}"}))
     except Exception as e:
         postMessage(json.dumps({"type": "error", "message": f"Error displaying table: {str(e)}"}))
 
