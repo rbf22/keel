@@ -1,4 +1,5 @@
 import * as webllm from "@mlc-ai/web-llm";
+import { logger } from "./logger";
 
 export async function checkWebGPU() {
   if (!(navigator as any).gpu) {
@@ -92,7 +93,10 @@ export class LLMEngine {
   }
 
   async generate(prompt: string, onToken: (text: string) => void, history: webllm.ChatCompletionMessageParam[] = []) {
-    if (!this.engine) throw new Error("Engine not initialized");
+    if (!this.engine) {
+      logger.error("llm", "Engine not initialized");
+      throw new Error("Engine not initialized");
+    }
 
     const systemPrompt = `You are Keel, a local-first AI agent for iPad.
 You have access to a Python execution environment for data analysis and visualization.
@@ -127,17 +131,32 @@ All Python code you write will be executed automatically. Use it whenever it hel
       { role: "user", content: prompt },
     ];
 
+    logger.info("llm", "Starting generation", { messages });
+    const startTime = performance.now();
+
     const chunks = await this.engine.chat.completions.create({
       messages,
       stream: true,
     });
 
     let fullText = "";
-    for await (const chunk of chunks) {
-      const content = chunk.choices[0]?.delta?.content || "";
-      fullText += content;
-      onToken(fullText);
+    try {
+      for await (const chunk of chunks) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        fullText += content;
+        onToken(fullText);
+      }
+    } catch (err: any) {
+      logger.error("llm", `Generation error: ${err.message}`, { error: err });
+      throw err;
     }
+
+    const endTime = performance.now();
+    logger.info("llm", "Generation complete", {
+      durationMs: endTime - startTime,
+      tokenCountEstimate: fullText.length / 4, // rough estimate
+      fullText
+    });
 
     return fullText;
   }

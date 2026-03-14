@@ -1,3 +1,5 @@
+import { logger } from "./logger";
+
 export interface PythonOutput {
   type: 'log' | 'table' | 'chart' | 'download' | 'error' | 'ready' | 'complete';
   message?: string;
@@ -45,8 +47,12 @@ export class PythonRuntime {
 
   async execute(code: string) {
     if (!this.worker || !this.isReady) {
+      logger.error('python', 'Python runtime not ready');
       throw new Error('Python runtime not ready');
     }
+
+    logger.info('python', 'Executing code', { code });
+    const startTime = performance.now();
 
     return new Promise<void>((resolve, reject) => {
       let timeout: any;
@@ -57,8 +63,11 @@ export class PythonRuntime {
           clearTimeout(timeout);
           this.worker!.removeEventListener('message', handleMessage);
           if (output.type === 'complete') {
+            const duration = performance.now() - startTime;
+            logger.info('python', 'Execution complete', { durationMs: duration });
             resolve();
           } else {
+            logger.error('python', `Execution error: ${output.message}`);
             reject(new Error(output.message));
           }
         }
