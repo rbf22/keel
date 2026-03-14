@@ -191,6 +191,10 @@ button:disabled {
   gap: 1rem;
 }
 
+.output-content.active {
+  display: flex;
+}
+
 .output-log {
   color: #ccc;
   white-space: pre-wrap;
