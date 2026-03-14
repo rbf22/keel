@@ -1,6 +1,7 @@
 import './style.css'
 import { LLMEngine, SUPPORTED_MODELS, detectBestModel } from './llm'
 import { PythonRuntime, type PythonOutput } from './python-runtime'
+import { logger, type LogEntry } from './logger'
 import embed from 'vega-embed'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -11,23 +12,31 @@ app.innerHTML = `
     <div class="status-bar" id="status">Ready</div>
 
     <div class="main-layout">
-      <div class="chat-container">
-        <div class="messages" id="messages">
-          <div class="message assistant-message">Hello! I am Keel, your local iPad agent. Select a model and press "Initialize" to start.</div>
-        </div>
-        <div class="input-area">
-          <input type="text" id="userInput" placeholder="Type a message..." disabled />
-          <button id="sendBtn" disabled>Send</button>
-        </div>
-      </div>
-
       <div class="output-panel">
-        <div class="output-header">
-          <span>Python Output</span>
-          <span id="pythonStatus">Idle</span>
+        <div class="output-tabs">
+          <button class="tab-btn active" data-tab="chat">Chat</button>
+          <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
+          <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
         </div>
-        <div class="output-content" id="pythonOutput">
+
+        <div class="output-content active" id="chatTab" data-tab-content="chat">
+          <div class="chat-container">
+            <div class="messages" id="messages">
+              <div class="message assistant-message">Hello! I am Keel, your local iPad agent. Select a model and press "Initialize" to start.</div>
+            </div>
+            <div class="input-area">
+              <input type="text" id="userInput" placeholder="Type a message..." disabled />
+              <button id="sendBtn" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="output-content" id="pythonOutput" data-tab-content="python" style="display: none;">
           <div class="output-log">Python runtime not initialized.</div>
+        </div>
+
+        <div class="output-content" id="debugLogs" data-tab-content="logs" style="display: none;">
+          <div class="output-log">Debug logs will appear here.</div>
         </div>
       </div>
     </div>
@@ -55,10 +64,87 @@ const userInput = document.getElementById('userInput')! as HTMLInputElement
 const sendBtn = document.getElementById('sendBtn')! as HTMLButtonElement
 const initBtn = document.getElementById('initBtn')! as HTMLButtonElement
 const statsEl = document.getElementById('stats')!
+const debugLogsEl = document.getElementById('debugLogs')!
+const logNotificationEl = document.getElementById('logNotification')!
+
+// Tab switching logic
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = (btn as HTMLButtonElement).dataset.tab;
+
+    // Update buttons
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    // Update content
+    document.querySelectorAll('.output-content').forEach(c => {
+      (c as HTMLElement).style.display = 'none';
+      c.classList.remove('active');
+    });
+    const activeContent = document.querySelector(`.output-content[data-tab-content="${tab}"]`) as HTMLElement;
+    if (activeContent) {
+      activeContent.style.display = 'flex';
+      activeContent.classList.add('active');
+    }
+
+    // Hide notification dot if logs tab is clicked
+    if (tab === 'logs') {
+      logNotificationEl.style.display = 'none';
+    }
+  });
+});
 
 let engine: LLMEngine | null = null
 let python: PythonRuntime | null = null
 let chatHistory: any[] = []
+
+// Subscribe to logs
+let logsInitialized = false;
+logger.subscribe((entry: LogEntry) => {
+  if (!logsInitialized) {
+    debugLogsEl.innerHTML = '';
+    logsInitialized = true;
+  }
+
+  const logDiv = document.createElement('div');
+  logDiv.className = `log-entry ${entry.level}`;
+
+  const timestamp = new Date(entry.timestamp).toLocaleTimeString();
+  const category = entry.category.toUpperCase();
+
+  const metaSpan = document.createElement('span');
+  metaSpan.className = 'log-meta';
+  metaSpan.textContent = `[${timestamp}] [${category}] `;
+  logDiv.appendChild(metaSpan);
+
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'log-msg';
+  msgSpan.textContent = entry.message;
+  logDiv.appendChild(msgSpan);
+
+  if (entry.data) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'Data';
+    details.appendChild(summary);
+
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(entry.data, null, 2);
+    details.appendChild(pre);
+    logDiv.appendChild(details);
+  }
+
+  debugLogsEl.appendChild(logDiv);
+  debugLogsEl.scrollTop = debugLogsEl.scrollHeight;
+
+  // Show notification dot on error
+  if (entry.level === 'error') {
+    const activeTab = document.querySelector('.tab-btn.active') as HTMLButtonElement;
+    if (activeTab && activeTab.dataset.tab !== 'logs') {
+      logNotificationEl.style.display = 'block';
+    }
+  }
+});
 
 async function initModelSelection() {
   const savedModelId = localStorage.getItem('selectedModelId');
@@ -161,6 +247,7 @@ initBtn.onclick = async () => {
   localStorage.setItem('selectedModelId', selectedModelId);
 
   try {
+    logger.info('system', `Initializing with model: ${selectedModelId}`);
     // Init Python first or in parallel
     python = new PythonRuntime(handlePythonOutput);
     const pythonPromise = python.init();
@@ -172,12 +259,14 @@ initBtn.onclick = async () => {
 
     await Promise.all([pythonPromise, enginePromise]);
 
+    logger.info('system', 'Initialization successful');
     statusEl.innerText = "Keel Ready (WebGPU + Python)"
     userInput.disabled = false
     sendBtn.disabled = false
     initBtn.style.display = 'none'
     modelSelectContainer.style.display = 'none'
   } catch (err: any) {
+    logger.error('system', `Initialization failed: ${err.message}`, { error: err });
     statusEl.innerText = `Error: ${err.message}`
     initBtn.disabled = false
     modelSelect.disabled = false

@@ -5,7 +5,7 @@ let pyodide: PyodideInterface;
 async function init() {
   try {
     pyodide = await loadPyodide({
-      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.0/full/",
+      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/",
     });
 
     await pyodide.loadPackage(["pandas", "numpy"]);
