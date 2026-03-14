@@ -12,24 +12,29 @@ app.innerHTML = `
     <div class="status-bar" id="status">Ready</div>
 
     <div class="main-layout">
-      <div class="chat-container">
-        <div class="messages" id="messages">
-          <div class="message assistant-message">Hello! I am Keel, your local iPad agent. Select a model and press "Initialize" to start.</div>
-        </div>
-        <div class="input-area">
-          <input type="text" id="userInput" placeholder="Type a message..." disabled />
-          <button id="sendBtn" disabled>Send</button>
-        </div>
-      </div>
-
       <div class="output-panel">
         <div class="output-tabs">
-          <button class="tab-btn active" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
+          <button class="tab-btn active" data-tab="chat">Chat</button>
+          <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
           <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
         </div>
-        <div class="output-content active" id="pythonOutput" data-tab-content="python">
+
+        <div class="output-content active" id="chatTab" data-tab-content="chat">
+          <div class="chat-container">
+            <div class="messages" id="messages">
+              <div class="message assistant-message">Hello! I am Keel, your local iPad agent. Select a model and press "Initialize" to start.</div>
+            </div>
+            <div class="input-area">
+              <input type="text" id="userInput" placeholder="Type a message..." disabled />
+              <button id="sendBtn" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="output-content" id="pythonOutput" data-tab-content="python" style="display: none;">
           <div class="output-log">Python runtime not initialized.</div>
         </div>
+
         <div class="output-content" id="debugLogs" data-tab-content="logs" style="display: none;">
           <div class="output-log">Debug logs will appear here.</div>
         </div>
