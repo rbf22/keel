@@ -69,6 +69,30 @@ body {
   align-self: flex-start;
   background-color: #333;
   color: #eee;
+  position: relative;
+}
+
+.agent-label {
+  font-size: 0.65rem;
+  font-weight: bold;
+  color: #007aff;
+  margin-bottom: 0.2rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05rem;
+}
+
+.agent-manager { border-left: 4px solid #007aff; }
+.agent-researcher { border-left: 4px solid #5856d6; }
+.agent-slide_writer { border-left: 4px solid #ff9500; }
+.agent-reviewer { border-left: 4px solid #34c759; }
+
+.switch-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #eee;
+  cursor: pointer;
 }
 
 .input-area {
