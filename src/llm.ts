@@ -92,13 +92,18 @@ export class LLMEngine {
     });
   }
 
-  async generate(prompt: string, onToken: (text: string) => void, history: webllm.ChatCompletionMessageParam[] = []) {
+  async generate(
+    prompt: string,
+    onToken: (text: string) => void,
+    history: webllm.ChatCompletionMessageParam[] = [],
+    systemOverride?: string
+  ) {
     if (!this.engine) {
       logger.error("llm", "Engine not initialized");
       throw new Error("Engine not initialized");
     }
 
-    const systemPrompt = `You are Keel, a local-first AI agent for iPad.
+    const defaultSystemPrompt = `You are Keel, a local-first AI agent for iPad.
 You have access to a Python execution environment for data analysis and visualization.
 When you need to perform calculations, process data, or create charts, write a Python script in a triple-backtick block starting with \`\`\`python.
 
@@ -126,6 +131,8 @@ display_chart({
 \`\`\`
 
 All Python code you write will be executed automatically. Use it whenever it helps answer the user's request.`;
+
+    const systemPrompt = systemOverride || defaultSystemPrompt;
 
     const messages: webllm.ChatCompletionMessageParam[] = [
       { role: "system", content: systemPrompt },

@@ -2,6 +2,8 @@ import './style.css'
 import { LLMEngine, SUPPORTED_MODELS, detectBestModel } from './llm'
 import { PythonRuntime, type PythonOutput } from './python-runtime'
 import { logger, type LogEntry } from './logger'
+import { storage } from './storage'
+import { AgentOrchestrator } from './orchestrator'
 import embed from 'vega-embed'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -15,8 +17,13 @@ app.innerHTML = `
       <div class="output-panel">
         <div class="output-tabs">
           <button class="tab-btn active" data-tab="chat">Chat</button>
+          <button class="tab-btn" data-tab="slides">Slides</button>
           <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
           <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
+        </div>
+
+        <div class="output-content" id="slidesTab" data-tab-content="slides" style="display: none;">
+          <iframe id="slidesPreview" style="width: 100%; height: 100%; border: none; background: white;"></iframe>
         </div>
 
         <div class="output-content active" id="chatTab" data-tab-content="chat">
@@ -48,13 +55,26 @@ app.innerHTML = `
 
     <div class="stats" id="stats"></div>
     <div class="controls" style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: center;">
-      <div id="modelSelectContainer">
-        <label for="modelSelect">Model:</label>
-        <select id="modelSelect">
-          ${SUPPORTED_MODELS.map(m => `<option value="${m.modelId}">${m.displayName} (~${m.vramRequiredMB}MB)</option>`).join('')}
-        </select>
+      <div id="setupControls" style="display: flex; flex-direction: column; gap: 0.5rem; align-items: center;">
+        <div id="modelSelectContainer">
+          <label for="modelSelect">Model:</label>
+          <select id="modelSelect">
+            ${SUPPORTED_MODELS.map(m => `<option value="${m.modelId}">${m.displayName} (~${m.vramRequiredMB}MB)</option>`).join('')}
+          </select>
+        </div>
+        <button id="initBtn">Initialize Local LLM & Python</button>
       </div>
-      <button id="initBtn">Initialize Local LLM & Python</button>
+      <div id="agentControls" style="display: none; flex-direction: column; gap: 0.5rem; align-items: center; background: #222; padding: 0.8rem 1.2rem; border-radius: 20px; max-width: 90%;">
+        <div style="display: flex; gap: 1rem; align-items: center;">
+          <label style="font-size: 0.8rem; color: #888;">Mode:</label>
+          <label class="switch-label"><input type="checkbox" id="multiAgentToggle"> Multi-Agent Agency</label>
+        </div>
+        <div id="personaSelection" style="display: none; gap: 0.8rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; border-top: 1px solid #333; padding-top: 0.5rem;">
+          <label class="switch-label" title="Information Specialist"><input type="checkbox" class="persona-checkbox" value="researcher" checked> Researcher</label>
+          <label class="switch-label" title="Presentation Expert"><input type="checkbox" class="persona-checkbox" value="slide_writer" checked> Slide Writer</label>
+          <label class="switch-label" title="Quality Controller"><input type="checkbox" class="persona-checkbox" value="reviewer" checked> Reviewer</label>
+        </div>
+      </div>
     </div>
   </div>
 `
@@ -72,6 +92,15 @@ const statsEl = document.getElementById('stats')!
 const debugLogsEl = document.getElementById('logsContainer')!
 const copyLogsBtn = document.getElementById('copyLogsBtn')! as HTMLButtonElement
 const logNotificationEl = document.getElementById('logNotification')!
+const setupControls = document.getElementById('setupControls')!
+const agentControls = document.getElementById('agentControls')!
+const multiAgentToggle = document.getElementById('multiAgentToggle')! as HTMLInputElement
+const personaSelection = document.getElementById('personaSelection')!
+const slidesPreview = document.getElementById('slidesPreview')! as HTMLIFrameElement
+
+multiAgentToggle.onchange = () => {
+    personaSelection.style.display = multiAgentToggle.checked ? 'flex' : 'none';
+};
 
 // Tab switching logic
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -281,13 +310,16 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
 initBtn.onclick = async () => {
   initBtn.disabled = true
   modelSelect.disabled = true
-  statusEl.textContent = "Initializing LLM..."
+  statusEl.textContent = "Initializing..."
   pythonStatusEl.textContent = "Initializing..."
 
   const selectedModelId = modelSelect.value;
   localStorage.setItem('selectedModelId', selectedModelId);
 
   try {
+    logger.info('system', `Initializing storage...`);
+    await storage.init();
+
     logger.info('system', `Initializing with model: ${selectedModelId}`);
     // Init Python first or in parallel
     python = new PythonRuntime(handlePythonOutput);
@@ -301,11 +333,11 @@ initBtn.onclick = async () => {
     await Promise.all([pythonPromise, enginePromise]);
 
     logger.info('system', 'Initialization successful');
-    statusEl.textContent = "Keel Ready (WebGPU + Python)"
+    statusEl.textContent = "Keel Ready"
     userInput.disabled = false
     sendBtn.disabled = false
-    initBtn.style.display = 'none'
-    modelSelectContainer.style.display = 'none'
+    setupControls.style.display = 'none'
+    agentControls.style.display = 'flex'
   } catch (err: any) {
     logger.error('system', `Initialization failed: ${err.message}`, { error: err });
     statusEl.textContent = `Error: ${err.message}`
@@ -331,11 +363,49 @@ async function handleSend(overrideText?: string, retryCount = 0) {
 
   if (overrideText) {
     chatHistory.push({ role: 'user', content: text });
-    // In override/recovery mode, the message is already added to UI by the caller
   } else {
     userInput.value = ''
     addMessage(text, 'user')
     chatHistory.push({ role: 'user', content: text });
+  }
+
+  if (multiAgentToggle.checked) {
+    const selectedPersonas = Array.from(document.querySelectorAll('.persona-checkbox:checked')).map((el: any) => el.value);
+    const orchestrator = new AgentOrchestrator(engine);
+    const agentDivs: Record<string, HTMLDivElement> = {};
+
+    try {
+      await orchestrator.runTask(text, (update) => {
+        if (!agentDivs[update.personaId]) {
+          const div = document.createElement('div');
+          div.className = `message assistant-message agent-${update.personaId}`;
+          const label = document.createElement('div');
+          label.className = 'agent-label';
+          label.textContent = update.personaId.toUpperCase();
+          div.appendChild(label);
+          const content = document.createElement('div');
+          content.className = 'agent-content';
+          div.appendChild(content);
+          messagesEl.appendChild(div);
+          agentDivs[update.personaId] = div;
+        }
+        const contentDiv = agentDivs[update.personaId].querySelector('.agent-content')!;
+        contentDiv.textContent = update.content;
+
+        // If slide writer produces Reveal.js content, update preview
+        if (update.personaId === 'slide_writer' && update.content.includes('reveal.js')) {
+            updateSlidesPreview(update.content);
+        }
+
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+    } catch (err: any) {
+      addMessage(`Orchestrator Error: ${err.message}`, 'assistant');
+    } finally {
+      userInput.disabled = false;
+      sendBtn.disabled = false;
+    }
+    return;
   }
 
   const assistantDiv = addMessage('...', 'assistant')
@@ -349,7 +419,7 @@ async function handleSend(overrideText?: string, retryCount = 0) {
       fullText = updatedText;
       assistantDiv.textContent = fullText
       messagesEl.scrollTop = messagesEl.scrollHeight
-    }, chatHistory.slice(0, -1)); // History without the current message as generate adds it
+    }, chatHistory.slice(0, -1));
 
     chatHistory.push({ role: 'assistant', content: fullText });
 
@@ -426,6 +496,34 @@ Please analyze the error and provide a corrected version of the code.`;
       }, 100);
     }
   }
+}
+
+function updateSlidesPreview(content: string) {
+    // Basic Reveal.js template
+    const revealTemplate = `
+        <!doctype html>
+        <html>
+            <head>
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css">
+            </head>
+            <body>
+                <div class="reveal">
+                    <div class="slides">
+                        ${content.includes('```html') ? content.match(/```html\n([\s\S]*?)```/)?.[1] || content : content}
+                    </div>
+                </div>
+                <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+                <script>
+                    Reveal.initialize({
+                        hash: true,
+                        embedded: true
+                    });
+                </script>
+            </body>
+        </html>
+    `;
+    slidesPreview.srcdoc = revealTemplate;
 }
 
 sendBtn.onclick = () => handleSend()
