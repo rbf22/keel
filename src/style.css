@@ -318,6 +318,44 @@ th {
   border: 1px solid #444;
 }
 
+/* Settings Tab */
+.settings-container {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  text-align: left;
+}
+
+.settings-container h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: #eee;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-group label {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: #ccc;
+}
+
+.settings-hint {
+  font-size: 0.75rem;
+  color: #888;
+  margin: 0;
+}
+
+#saveSettingsBtn {
+  align-self: flex-start;
+  margin-top: 0.5rem;
+}
+
 /* Artifacts in Chat */
 .artifact-container {
   margin-top: 0.5rem;
@@ -383,5 +421,13 @@ th {
   }
   th {
     background: #eee;
+  }
+  .settings-container h3,
+  .settings-group label,
+  .switch-label {
+    color: #213547;
+  }
+  .settings-hint {
+    color: #666;
   }
 }
