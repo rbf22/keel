@@ -1,5 +1,5 @@
 import './style.css'
-import { LLMEngine, SUPPORTED_MODELS, detectBestModel } from './llm'
+import { HybridLLMEngine, LocalLLMEngine, SUPPORTED_MODELS, detectBestModel } from './llm'
 import { PythonRuntime, type PythonOutput } from './python-runtime'
 import { logger, type LogEntry } from './logger'
 import { storage } from './storage'
@@ -19,6 +19,7 @@ app.innerHTML = `
           <button class="tab-btn active" data-tab="chat">Chat</button>
           <button class="tab-btn" data-tab="slides">Slides</button>
           <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
+          <button class="tab-btn" data-tab="settings">Settings</button>
           <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
         </div>
 
@@ -40,6 +41,24 @@ app.innerHTML = `
 
         <div class="output-content" id="pythonOutput" data-tab-content="python" style="display: none;">
           <div class="output-log">Python runtime not initialized.</div>
+        </div>
+
+        <div class="output-content" id="settingsTab" data-tab-content="settings" style="display: none;">
+          <div class="settings-container">
+            <h3>Settings</h3>
+            <div class="settings-group">
+              <label for="geminiApiKey">Google Gemini API Key</label>
+              <input type="password" id="geminiApiKey" placeholder="Enter your API key...">
+              <p class="settings-hint">Your API key is stored locally in your browser.</p>
+            </div>
+            <div class="settings-group">
+              <label class="switch-label">
+                <input type="checkbox" id="onlineModeToggle"> Enable Online Mode (Gemini 1.5 Flash)
+              </label>
+              <p class="settings-hint">When enabled, Keel will use Google Gemini. If it fails or you're offline, it will automatically fall back to the local LLM.</p>
+            </div>
+            <button id="saveSettingsBtn">Save Settings</button>
+          </div>
         </div>
 
         <div class="output-content" id="debugLogs" data-tab-content="logs" style="display: none;">
@@ -83,7 +102,6 @@ const statusEl = document.getElementById('status')!
 const pythonStatusEl = document.getElementById('pythonStatus')!
 const pythonOutputEl = document.getElementById('pythonOutput')!
 const modelSelect = document.getElementById('modelSelect')! as HTMLSelectElement
-const modelSelectContainer = document.getElementById('modelSelectContainer')!
 const messagesEl = document.getElementById('messages')!
 const userInput = document.getElementById('userInput')! as HTMLInputElement
 const sendBtn = document.getElementById('sendBtn')! as HTMLButtonElement
@@ -97,6 +115,11 @@ const agentControls = document.getElementById('agentControls')!
 const multiAgentToggle = document.getElementById('multiAgentToggle')! as HTMLInputElement
 const personaSelection = document.getElementById('personaSelection')!
 const slidesPreview = document.getElementById('slidesPreview')! as HTMLIFrameElement
+
+// Settings elements
+const geminiApiKeyInput = document.getElementById('geminiApiKey')! as HTMLInputElement
+const onlineModeToggle = document.getElementById('onlineModeToggle')! as HTMLInputElement
+const saveSettingsBtn = document.getElementById('saveSettingsBtn')! as HTMLButtonElement
 
 multiAgentToggle.onchange = () => {
     personaSelection.style.display = multiAgentToggle.checked ? 'flex' : 'none';
@@ -129,7 +152,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-let engine: LLMEngine | null = null
+let engine: HybridLLMEngine | null = null
 let python: PythonRuntime | null = null
 let chatHistory: any[] = []
 
@@ -207,7 +230,7 @@ copyLogsBtn.onclick = () => {
   });
 };
 
-async function initModelSelection() {
+async function initSettings() {
   const savedModelId = localStorage.getItem('selectedModelId');
   if (savedModelId && SUPPORTED_MODELS.some(m => m.modelId === savedModelId)) {
     modelSelect.value = savedModelId;
@@ -215,9 +238,33 @@ async function initModelSelection() {
     const recommendedModelId = await detectBestModel();
     modelSelect.value = recommendedModelId;
   }
+
+  const savedApiKey = localStorage.getItem('geminiApiKey');
+  if (savedApiKey) geminiApiKeyInput.value = savedApiKey;
+
+  const savedOnlineMode = localStorage.getItem('onlineModeEnabled') === 'true';
+  onlineModeToggle.checked = savedOnlineMode;
 }
 
-initModelSelection();
+initSettings();
+
+saveSettingsBtn.onclick = () => {
+  const apiKey = geminiApiKeyInput.value.trim();
+  const enabled = onlineModeToggle.checked;
+
+  localStorage.setItem('geminiApiKey', apiKey);
+  localStorage.setItem('onlineModeEnabled', String(enabled));
+
+  if (engine) {
+    engine.setOnlineConfig(apiKey, enabled);
+  }
+
+  const originalText = saveSettingsBtn.textContent;
+  saveSettingsBtn.textContent = 'Saved!';
+  setTimeout(() => {
+    saveSettingsBtn.textContent = originalText;
+  }, 2000);
+};
 
 function addMessage(text: string, role: 'user' | 'assistant') {
   const div = document.createElement('div')
@@ -325,9 +372,21 @@ initBtn.onclick = async () => {
     python = new PythonRuntime(handlePythonOutput);
     const pythonPromise = python.init();
 
-    engine = new LLMEngine(selectedModelId, (msg) => {
+    const localEngine = new LocalLLMEngine(selectedModelId, (msg) => {
       statusEl.textContent = msg
-    })
+    });
+
+    engine = new HybridLLMEngine(localEngine, () => {
+      onlineModeToggle.checked = false;
+      localStorage.setItem('onlineModeEnabled', 'false');
+      addMessage("Online LLM failed. Falling back to local mode.", "assistant");
+    });
+
+    // Apply current settings
+    const apiKey = geminiApiKeyInput.value.trim();
+    const onlineEnabled = onlineModeToggle.checked;
+    engine.setOnlineConfig(apiKey, onlineEnabled);
+
     const enginePromise = engine.init();
 
     await Promise.all([pythonPromise, enginePromise]);
@@ -370,7 +429,6 @@ async function handleSend(overrideText?: string, retryCount = 0) {
   }
 
   if (multiAgentToggle.checked) {
-    const selectedPersonas = Array.from(document.querySelectorAll('.persona-checkbox:checked')).map((el: any) => el.value);
     const orchestrator = new AgentOrchestrator(engine);
     const agentDivs: Record<string, HTMLDivElement> = {};
 
@@ -415,11 +473,14 @@ async function handleSend(overrideText?: string, retryCount = 0) {
 
   try {
     let fullText = "";
-    await engine.generate(text, (updatedText) => {
-      fullText = updatedText;
-      assistantDiv.textContent = fullText
-      messagesEl.scrollTop = messagesEl.scrollHeight
-    }, chatHistory.slice(0, -1));
+    await engine.generate(text, {
+      onToken: (updatedText) => {
+        fullText = updatedText;
+        assistantDiv.textContent = fullText
+        messagesEl.scrollTop = messagesEl.scrollHeight
+      },
+      history: chatHistory.slice(0, -1)
+    });
 
     chatHistory.push({ role: 'assistant', content: fullText });
 

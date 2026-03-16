@@ -1,5 +1,5 @@
 import { LLMEngine } from "./llm";
-import { PERSONAS, Persona, SKILLS, Skill } from "./personas";
+import { PERSONAS, Persona, SKILLS } from "./personas";
 import { storage } from "./storage";
 import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
@@ -55,10 +55,14 @@ Request: "${userRequest}"
 Output the plan clearly.`;
 
     let planContent = "";
-    await this.engine.generate(planPrompt, (text) => {
-      planContent = text;
-      onUpdate({ personaId: "manager", content: text });
-    }, this.chatHistory, managerPrompt);
+    await this.engine.generate(planPrompt, {
+      onToken: (text) => {
+        planContent = text;
+        onUpdate({ personaId: "manager", content: text });
+      },
+      history: this.chatHistory,
+      systemOverride: managerPrompt
+    });
 
     this.chatHistory.push({ role: "user", content: userRequest });
     this.chatHistory.push({ role: "assistant", content: `[Plan] ${planContent}` });
@@ -78,10 +82,15 @@ Output the plan clearly.`;
         ? "Review the work done so far. Is it accurate and complete?"
         : `Continue with the plan. Your task is: ${personaId}.`;
 
-      await this.engine.generate(taskPrompt, (text) => {
-        personaContent = text;
-        onUpdate({ personaId, content: text });
-      }, this.chatHistory, systemPrompt);
+      // Future: Configure model per agent here (e.g., online for researcher, local for reviewer)
+      await this.engine.generate(taskPrompt, {
+        onToken: (text) => {
+          personaContent = text;
+          onUpdate({ personaId, content: text });
+        },
+        history: this.chatHistory,
+        systemOverride: systemPrompt
+      });
 
       this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${personaContent}` });
 

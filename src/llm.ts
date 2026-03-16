@@ -70,40 +70,19 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
 
 export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
 
-export class LLMEngine {
-  private engine: webllm.MLCEngineInterface | null = null;
-  private onUpdate: (message: string) => void;
-  private modelId: string;
+export interface GenerateOptions {
+  onToken: (text: string) => void;
+  history?: webllm.ChatCompletionMessageParam[];
+  systemOverride?: string;
+}
 
-  constructor(modelId: string, onUpdate: (message: string) => void) {
-    this.modelId = modelId;
-    this.onUpdate = onUpdate;
-  }
+export interface ILLMEngine {
+  init(): Promise<void>;
+  generate(prompt: string, options: GenerateOptions): Promise<string>;
+  getStats(): Promise<string | null>;
+}
 
-  async init() {
-    this.onUpdate("Checking WebGPU...");
-    await checkWebGPU();
-
-    this.onUpdate("Initializing Engine...");
-    this.engine = await webllm.CreateMLCEngine(this.modelId, {
-      initProgressCallback: (report: webllm.InitProgressReport) => {
-        this.onUpdate(`Loading: ${report.text}`);
-      },
-    });
-  }
-
-  async generate(
-    prompt: string,
-    onToken: (text: string) => void,
-    history: webllm.ChatCompletionMessageParam[] = [],
-    systemOverride?: string
-  ) {
-    if (!this.engine) {
-      logger.error("llm", "Engine not initialized");
-      throw new Error("Engine not initialized");
-    }
-
-    const defaultSystemPrompt = `You are Keel, a local-first AI agent for iPad.
+const DEFAULT_SYSTEM_PROMPT = `You are Keel, a local-first AI agent for iPad.
 You have access to a Python execution environment for data analysis and visualization.
 When you need to perform calculations, process data, or create charts, write a Python script in a triple-backtick block starting with \`\`\`python.
 
@@ -132,7 +111,36 @@ display_chart({
 
 All Python code you write will be executed automatically. Use it whenever it helps answer the user's request.`;
 
-    const systemPrompt = systemOverride || defaultSystemPrompt;
+export class LocalLLMEngine implements ILLMEngine {
+  private engine: webllm.MLCEngineInterface | null = null;
+  private onUpdate: (message: string) => void;
+  private modelId: string;
+
+  constructor(modelId: string, onUpdate: (message: string) => void) {
+    this.modelId = modelId;
+    this.onUpdate = onUpdate;
+  }
+
+  async init() {
+    this.onUpdate("Checking WebGPU...");
+    await checkWebGPU();
+
+    this.onUpdate("Initializing Engine...");
+    this.engine = await webllm.CreateMLCEngine(this.modelId, {
+      initProgressCallback: (report: webllm.InitProgressReport) => {
+        this.onUpdate(`Loading: ${report.text}`);
+      },
+    });
+  }
+
+  async generate(prompt: string, options: GenerateOptions) {
+    if (!this.engine) {
+      logger.error("llm", "Local engine not initialized");
+      throw new Error("Local engine not initialized");
+    }
+
+    const { onToken, history = [], systemOverride } = options;
+    const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
 
     const messages: webllm.ChatCompletionMessageParam[] = [
       { role: "system", content: systemPrompt },
@@ -140,7 +148,7 @@ All Python code you write will be executed automatically. Use it whenever it hel
       { role: "user", content: prompt },
     ];
 
-    logger.info("llm", "Starting generation", { messages });
+    logger.info("llm", "Starting local generation", { messages });
     const startTime = performance.now();
 
     const chunks = await this.engine.chat.completions.create({
@@ -156,14 +164,14 @@ All Python code you write will be executed automatically. Use it whenever it hel
         onToken(fullText);
       }
     } catch (err: any) {
-      logger.error("llm", `Generation error: ${err.message}`, { error: err });
+      logger.error("llm", `Local generation error: ${err.message}`, { error: err });
       throw err;
     }
 
     const endTime = performance.now();
-    logger.info("llm", "Generation complete", {
+    logger.info("llm", "Local generation complete", {
       durationMs: endTime - startTime,
-      tokenCountEstimate: fullText.length / 4, // rough estimate
+      tokenCountEstimate: fullText.length / 4,
       fullText
     });
 
@@ -175,3 +183,148 @@ All Python code you write will be executed automatically. Use it whenever it hel
     return await this.engine.runtimeStatsText();
   }
 }
+
+export class OnlineLLMEngine implements ILLMEngine {
+  private apiKey: string;
+  private model: string;
+
+  constructor(apiKey: string, model: string = "gemini-1.5-flash") {
+    this.apiKey = apiKey;
+    this.model = model;
+  }
+
+  async init() {
+    // No initialization needed for online engine
+    return;
+  }
+
+  async generate(prompt: string, options: GenerateOptions) {
+    const { onToken, history = [], systemOverride } = options;
+    const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: prompt },
+    ];
+
+    logger.info("llm", "Starting online generation", { model: this.model });
+    const startTime = performance.now();
+
+    // Using Google's OpenAI-compatible endpoint
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${this.apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Online engine error: ${errorData.error?.message || response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Failed to get reader from response body");
+
+    const decoder = new TextDecoder("utf-8");
+    let fullText = "";
+    let leftover = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = (leftover + chunk).split("\n");
+        leftover = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") break;
+
+            try {
+              const parsed = JSON.parse(data);
+              const content = parsed.choices[0]?.delta?.content || "";
+              fullText += content;
+              onToken(fullText);
+            } catch (e) {
+              // Ignore parse errors for partial chunks
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      logger.error("llm", `Online generation error: ${err.message}`, { error: err });
+      throw err;
+    }
+
+    const endTime = performance.now();
+    logger.info("llm", "Online generation complete", {
+      durationMs: endTime - startTime,
+      fullText
+    });
+
+    return fullText;
+  }
+
+  async getStats() {
+    return "Online Mode (Google Gemini)";
+  }
+}
+
+export class HybridLLMEngine implements ILLMEngine {
+  private localEngine: LocalLLMEngine;
+  private onlineEngine: OnlineLLMEngine | null = null;
+  private useOnline: boolean = false;
+  private onFallback: () => void;
+
+  constructor(localEngine: LocalLLMEngine, onFallback: () => void) {
+    this.localEngine = localEngine;
+    this.onFallback = onFallback;
+  }
+
+  setOnlineConfig(apiKey: string | null, enabled: boolean) {
+    if (apiKey) {
+      this.onlineEngine = new OnlineLLMEngine(apiKey);
+    } else {
+      this.onlineEngine = null;
+    }
+    this.useOnline = enabled && !!this.onlineEngine;
+  }
+
+  async init() {
+    await this.localEngine.init();
+  }
+
+  async generate(prompt: string, options: GenerateOptions) {
+    if (this.useOnline && this.onlineEngine) {
+      try {
+        return await this.onlineEngine.generate(prompt, options);
+      } catch (err: any) {
+        logger.warn("llm", `Online engine failed, falling back to local: ${err.message}`);
+        this.useOnline = false;
+        this.onFallback();
+        return await this.localEngine.generate(prompt, options);
+      }
+    }
+    return await this.localEngine.generate(prompt, options);
+  }
+
+  async getStats() {
+    if (this.useOnline && this.onlineEngine) {
+      return await this.onlineEngine.getStats();
+    }
+    return await this.localEngine.getStats();
+  }
+}
+
+// For backward compatibility during refactor
+export type LLMEngine = HybridLLMEngine;
