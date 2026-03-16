@@ -3,18 +3,24 @@ import { PERSONAS, Persona, SKILLS } from "./personas";
 import { storage } from "./storage";
 import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
+import { PythonRuntime } from "./python-runtime";
 
 export interface AgentResponse {
   personaId: string;
   content: string;
+  type?: 'text' | 'table' | 'chart' | 'error';
+  data?: any;
 }
 
 export class AgentOrchestrator {
   private engine: LLMEngine;
+  private python: PythonRuntime;
   private chatHistory: ChatCompletionMessageParam[] = [];
+  private maxLoops = 10;
 
-  constructor(engine: LLMEngine) {
+  constructor(engine: LLMEngine, python: PythonRuntime) {
     this.engine = engine;
+    this.python = python;
   }
 
   private async getPersonaPrompt(persona: Persona): Promise<string> {
@@ -43,59 +49,136 @@ Stay in character. Focus on your specific task.
 `;
   }
 
-  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "slide_writer", "reviewer"]) {
-    logger.info("orchestrator", "Starting task", { userRequest, activePersonaIds });
+  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "slide_writer"]) {
+    logger.info("orchestrator", "Starting complex task", { userRequest, activePersonaIds });
+    this.chatHistory = []; // Reset history for new task
 
-    // 1. Manager planning
-    const manager = PERSONAS["manager"];
-    const managerPrompt = await this.getPersonaPrompt(manager);
-    const planPrompt = `Analyze this user request and decide which specialized agents (${activePersonaIds.join(", ")}) should be involved and in what order.
-Request: "${userRequest}"
+    let loopCount = 0;
+    let taskComplete = false;
+    let lastOutput = "";
+    let lastPythonCode = "";
+    let pythonApproved = false;
 
-Output the plan clearly.`;
-
-    let planContent = "";
-    await this.engine.generate(planPrompt, {
-      onToken: (text) => {
-        planContent = text;
-        onUpdate({ personaId: "manager", content: text });
-      },
-      history: this.chatHistory,
-      systemOverride: managerPrompt
-    });
-
+    // Initial user request in history
     this.chatHistory.push({ role: "user", content: userRequest });
-    this.chatHistory.push({ role: "assistant", content: `[Plan] ${planContent}` });
 
-    // 2. Simple Sequential Execution based on active personas
-    // In a more complex system, the Manager would parse the plan and loop.
+    while (!taskComplete && loopCount < this.maxLoops) {
+      loopCount++;
+      logger.info("orchestrator", `Loop ${loopCount} starting`);
 
-    for (const personaId of activePersonaIds) {
-      const persona = PERSONAS[personaId];
-      if (!persona) continue;
+      // 1. Manager decides next step
+      const manager = PERSONAS["manager"];
+      const managerPrompt = await this.getPersonaPrompt(manager);
+      const managerActionPrompt = `Next action for user request: "${userRequest}".
+Current state: ${lastOutput ? "Working on it." : "Just started."}
+Decide which agent to call: ${activePersonaIds.join(", ")} or say "FINISH" to summarize.
+If code was just written, you MUST call the "reviewer".
+If code was APPROVED, you MUST call "manager" again to trigger execution (use command: EXECUTE_PYTHON).`;
 
-      logger.info("orchestrator", `Activating persona: ${personaId}`);
+      let managerDecision = "";
+      await this.engine.generate(managerActionPrompt, {
+        onToken: (text) => {
+          managerDecision = text;
+          onUpdate({ personaId: "manager", content: text });
+        },
+        history: this.chatHistory,
+        systemOverride: managerPrompt
+      });
+
+      this.chatHistory.push({ role: "assistant", content: `[Manager] ${managerDecision}` });
+
+      if (managerDecision.includes("FINISH")) {
+        taskComplete = true;
+        break;
+      }
+
+      // Check for manual execution command from distilled manager logic
+      if (managerDecision.includes("EXECUTE_PYTHON") && pythonApproved && lastPythonCode) {
+          onUpdate({ personaId: "system", content: "Executing Python code..." });
+          try {
+            // Need to capture python logs
+            let pyOutput = "";
+            const originalOnOutput = this.python.onOutput;
+            this.python.onOutput = (out) => {
+              if (out.type === 'log' || out.type === 'error') {
+                pyOutput += (out.message + "\n");
+                onUpdate({
+                  personaId: "python",
+                  content: out.message || "",
+                  type: out.type === 'error' ? 'error' : 'text'
+                });
+              } else if (out.type === 'table' || out.type === 'chart') {
+                onUpdate({
+                  personaId: "python",
+                  content: `[Displaying ${out.type}]`,
+                  type: out.type,
+                  data: out.type === 'table' ? out.data : out.spec
+                });
+              }
+            };
+
+            await this.python.execute(lastPythonCode);
+            this.python.onOutput = originalOnOutput;
+
+            lastOutput = `Python Output:\n${pyOutput}`;
+            this.chatHistory.push({ role: "assistant", content: `[System] ${lastOutput}` });
+            pythonApproved = false; // Reset for next block
+            lastPythonCode = "";
+            continue;
+          } catch (err: any) {
+            lastOutput = `Python Error: ${err.message}`;
+            this.chatHistory.push({ role: "assistant", content: `[System] ${lastOutput}` });
+            pythonApproved = false;
+            lastPythonCode = "";
+            continue;
+          }
+      }
+
+      // 2. Delegate to an agent based on Manager's decision
+      // We look for agent names in the manager's text
+      let delegatedPersonaId = "";
+      for (const id of activePersonaIds) {
+        if (managerDecision.toLowerCase().includes(id)) {
+          delegatedPersonaId = id;
+          break;
+        }
+      }
+
+      if (!delegatedPersonaId) {
+        // Default to a fallback or retry
+        logger.warn("orchestrator", "Manager didn't pick a clear agent, falling back to sequential hint");
+        delegatedPersonaId = activePersonaIds[0];
+      }
+
+      const persona = PERSONAS[delegatedPersonaId];
       const systemPrompt = await this.getPersonaPrompt(persona);
+      const taskPrompt = `Perform your role for the current task. If you are the Reviewer, check the previous output. If you are the Coder, write the code.`;
 
-      let personaContent = "";
-      const taskPrompt = personaId === "reviewer"
-        ? "Review the work done so far. Is it accurate and complete?"
-        : `Continue with the plan. Your task is: ${personaId}.`;
-
-      // Future: Configure model per agent here (e.g., online for researcher, local for reviewer)
+      let agentContent = "";
       await this.engine.generate(taskPrompt, {
         onToken: (text) => {
-          personaContent = text;
-          onUpdate({ personaId, content: text });
+          agentContent = text;
+          onUpdate({ personaId: delegatedPersonaId, content: text });
         },
         history: this.chatHistory,
         systemOverride: systemPrompt
       });
 
-      this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${personaContent}` });
+      this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
+      lastOutput = agentContent;
 
-      // Store memory of the work done
-      await storage.addMemory(personaId, `I completed a task: ${personaContent.substring(0, 100)}...`);
+      const codeMatch = agentContent.match(/```python\n([\s\S]*?)```/);
+      if (codeMatch) {
+        lastPythonCode = codeMatch[1];
+      }
+
+      if (delegatedPersonaId === "reviewer" && agentContent.includes("APPROVED")) {
+        pythonApproved = true;
+      } else if (delegatedPersonaId === "reviewer") {
+        pythonApproved = false;
+      }
+
+      await storage.addMemory(delegatedPersonaId, `I worked on: ${userRequest}. My output: ${agentContent.substring(0, 50)}...`);
     }
 
     return this.chatHistory;
