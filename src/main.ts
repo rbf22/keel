@@ -429,7 +429,7 @@ async function handleSend(overrideText?: string, retryCount = 0) {
   }
 
   if (multiAgentToggle.checked) {
-    const orchestrator = new AgentOrchestrator(engine);
+    const orchestrator = new AgentOrchestrator(engine, python);
     const agentDivs: Record<string, HTMLDivElement> = {};
 
     try {
@@ -448,7 +448,19 @@ async function handleSend(overrideText?: string, retryCount = 0) {
           agentDivs[update.personaId] = div;
         }
         const contentDiv = agentDivs[update.personaId].querySelector('.agent-content')!;
-        contentDiv.textContent = update.content;
+
+        if (update.type === 'table' && update.data) {
+          handlePythonOutput({ type: 'table', data: update.data }, contentDiv as HTMLElement);
+        } else if (update.type === 'chart' && update.data) {
+          handlePythonOutput({ type: 'chart', spec: update.data }, contentDiv as HTMLElement);
+        } else if (update.type === 'error') {
+          const errDiv = document.createElement('div');
+          errDiv.className = 'output-error';
+          errDiv.textContent = update.content;
+          contentDiv.appendChild(errDiv);
+        } else {
+          contentDiv.textContent = update.content;
+        }
 
         // If slide writer produces Reveal.js content, update preview
         if (update.personaId === 'slide_writer' && update.content.includes('reveal.js')) {

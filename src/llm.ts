@@ -115,6 +115,7 @@ export class LocalLLMEngine implements ILLMEngine {
   private engine: webllm.MLCEngineInterface | null = null;
   private onUpdate: (message: string) => void;
   private modelId: string;
+  private isGenerating = false;
 
   constructor(modelId: string, onUpdate: (message: string) => void) {
     this.modelId = modelId;
@@ -138,6 +139,14 @@ export class LocalLLMEngine implements ILLMEngine {
       logger.error("llm", "Local engine not initialized");
       throw new Error("Local engine not initialized");
     }
+
+    if (this.isGenerating) {
+      logger.warn("llm", "Generation already in progress, waiting...");
+      // Simple busy wait or throw error? Better to prevent UI from sending.
+      throw new Error("Generation already in progress");
+    }
+
+    this.isGenerating = true;
 
     const { onToken, history = [], systemOverride } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
@@ -166,6 +175,8 @@ export class LocalLLMEngine implements ILLMEngine {
     } catch (err: any) {
       logger.error("llm", `Local generation error: ${err.message}`, { error: err });
       throw err;
+    } finally {
+      this.isGenerating = false;
     }
 
     const endTime = performance.now();
