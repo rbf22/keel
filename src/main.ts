@@ -18,6 +18,7 @@ app.innerHTML = `
         <div class="output-tabs">
           <button class="tab-btn active" data-tab="chat">Chat</button>
           <button class="tab-btn" data-tab="slides">Slides</button>
+          <button class="tab-btn" data-tab="context">Context</button>
           <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
           <button class="tab-btn" data-tab="settings">Settings</button>
           <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
@@ -30,12 +31,22 @@ app.innerHTML = `
         <div class="output-content active" id="chatTab" data-tab-content="chat">
           <div class="chat-container">
             <div class="messages" id="messages">
-              <div class="message assistant-message">Hello! I am Keel, your local iPad agent. Select a model and press "Initialize" to start.</div>
+              <div class="message assistant-message">Hello! I am Keel, your local agentic workstation. Select a model and press "Initialize" to start.</div>
             </div>
             <div class="input-area">
               <input type="text" id="userInput" placeholder="Type a message..." disabled />
               <button id="sendBtn" disabled>Send</button>
             </div>
+          </div>
+        </div>
+
+        <div class="output-content" id="contextTab" data-tab-content="context" style="display: none;">
+          <div class="context-header">
+            <span>Keel Virtual Filesystem (keel://)</span>
+            <button id="refreshContextBtn">Refresh</button>
+          </div>
+          <div id="vfsContainer" class="context-container">
+            <div class="output-log">Context not initialized.</div>
           </div>
         </div>
 
@@ -86,12 +97,13 @@ app.innerHTML = `
       <div id="agentControls" style="display: none; flex-direction: column; gap: 0.5rem; align-items: center; background: #222; padding: 0.8rem 1.2rem; border-radius: 20px; max-width: 90%;">
         <div style="display: flex; gap: 1rem; align-items: center;">
           <label style="font-size: 0.8rem; color: #888;">Mode:</label>
-          <label class="switch-label"><input type="checkbox" id="multiAgentToggle"> Multi-Agent Agency</label>
+          <label class="switch-label"><input type="checkbox" id="multiAgentToggle" checked> Multi-Agent Agency</label>
         </div>
-        <div id="personaSelection" style="display: none; gap: 0.8rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; border-top: 1px solid #333; padding-top: 0.5rem;">
+        <div id="personaSelection" style="display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; border-top: 1px solid #333; padding-top: 0.5rem;">
           <label class="switch-label" title="Information Specialist"><input type="checkbox" class="persona-checkbox" value="researcher" checked> Researcher</label>
           <label class="switch-label" title="Presentation Expert"><input type="checkbox" class="persona-checkbox" value="slide_writer" checked> Slide Writer</label>
           <label class="switch-label" title="Quality Controller"><input type="checkbox" class="persona-checkbox" value="reviewer" checked> Reviewer</label>
+          <label class="switch-label" title="System Monitor"><input type="checkbox" class="persona-checkbox" value="observer" checked> Observer</label>
         </div>
       </div>
     </div>
@@ -108,6 +120,8 @@ const sendBtn = document.getElementById('sendBtn')! as HTMLButtonElement
 const initBtn = document.getElementById('initBtn')! as HTMLButtonElement
 const statsEl = document.getElementById('stats')!
 const debugLogsEl = document.getElementById('logsContainer')!
+const vfsContainer = document.getElementById('vfsContainer')!
+const refreshContextBtn = document.getElementById('refreshContextBtn')! as HTMLButtonElement
 const copyLogsBtn = document.getElementById('copyLogsBtn')! as HTMLButtonElement
 const logNotificationEl = document.getElementById('logNotification')!
 const setupControls = document.getElementById('setupControls')!
@@ -143,6 +157,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (activeContent) {
       activeContent.style.display = 'flex';
       activeContent.classList.add('active');
+    }
+
+    // Special logic for context refresh
+    if (tab === 'context') {
+        refreshVFSDisplay();
     }
 
     // Hide notification dot if logs tab is clicked
@@ -204,6 +223,42 @@ logger.subscribe((entry: LogEntry) => {
     }
   }
 });
+
+async function refreshVFSDisplay() {
+    if (!storage) return;
+    vfsContainer.textContent = 'Loading...';
+    try {
+        const files = await storage.listFiles();
+        vfsContainer.textContent = '';
+        if (files.length === 0) {
+            vfsContainer.textContent = 'No files in keel://';
+            return;
+        }
+
+        for (const path of files) {
+            // Need to read file to show details
+            // We can add a more efficient 'getAllFiles' if needed, but for now:
+            const transaction = (storage as any).db.transaction(["vfs"], "readonly");
+            const store = transaction.objectStore("vfs");
+            const request = store.get(path);
+            request.onsuccess = () => {
+                const file = request.result;
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'vfs-item';
+                itemDiv.innerHTML = `
+                    <div class="vfs-path">${file.path}</div>
+                    <div class="vfs-meta">Type: ${file.mimeType} | Updated: ${new Date(file.updatedAt).toLocaleString()}</div>
+                    <div class="vfs-content">${file.content.substring(0, 500)}${file.content.length > 500 ? '...' : ''}</div>
+                `;
+                vfsContainer.appendChild(itemDiv);
+            };
+        }
+    } catch (err: any) {
+        vfsContainer.textContent = `Error: ${err.message}`;
+    }
+}
+
+refreshContextBtn.onclick = refreshVFSDisplay;
 
 copyLogsBtn.onclick = () => {
   const logs = logger.getLogs();
@@ -458,6 +513,14 @@ async function handleSend(overrideText?: string, retryCount = 0) {
           errDiv.className = 'output-error';
           errDiv.textContent = update.content;
           contentDiv.appendChild(errDiv);
+        } else if (update.type === 'observation') {
+            const obsDiv = document.createElement('div');
+            obsDiv.className = 'output-log';
+            obsDiv.style.borderLeft = '2px solid #ff2d55';
+            obsDiv.style.paddingLeft = '5px';
+            obsDiv.style.fontSize = '0.75rem';
+            obsDiv.textContent = update.content;
+            contentDiv.appendChild(obsDiv);
         } else {
           contentDiv.textContent = update.content;
         }

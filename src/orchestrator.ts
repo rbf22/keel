@@ -1,14 +1,15 @@
 import { LLMEngine } from "./llm";
-import { PERSONAS, Persona, SKILLS } from "./personas";
-import { storage } from "./storage";
+import { PERSONAS } from "./personas";
+import { storage, MemoryCategory } from "./storage";
 import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 import { PythonRuntime } from "./python-runtime";
+import { getSystemContext } from "./tools";
 
 export interface AgentResponse {
   personaId: string;
   content: string;
-  type?: 'text' | 'table' | 'chart' | 'error';
+  type?: 'text' | 'table' | 'chart' | 'error' | 'plan' | 'observation';
   data?: any;
 }
 
@@ -16,64 +17,38 @@ export class AgentOrchestrator {
   private engine: LLMEngine;
   private python: PythonRuntime;
   private chatHistory: ChatCompletionMessageParam[] = [];
-  private maxLoops = 10;
+  private maxLoops = 15;
 
   constructor(engine: LLMEngine, python: PythonRuntime) {
     this.engine = engine;
     this.python = python;
   }
 
-  private async getPersonaPrompt(persona: Persona): Promise<string> {
-    const skillsInstructions = persona.skills
-      .map(s => SKILLS[s])
-      .filter(Boolean)
-      .map(s => `- ${s.name}: ${s.instructions}`)
-      .join("\n");
-
-    const memories = await storage.getMemories(persona.id);
-    const recentMemories = memories.slice(-5).map(m => `- ${m.content}`).join("\n");
-
-    return `
-${persona.basePrompt}
-
-Your Role: ${persona.role}
-Your Description: ${persona.description}
-
-Available Skills:
-${skillsInstructions}
-
-Recent Memories:
-${recentMemories}
-
-Stay in character. Focus on your specific task.
-`;
-  }
-
-  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "slide_writer"]) {
-    logger.info("orchestrator", "Starting complex task", { userRequest, activePersonaIds });
-    this.chatHistory = []; // Reset history for new task
+  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "slide_writer", "observer"]) {
+    logger.info("orchestrator", "Starting complex task with tools", { userRequest, activePersonaIds });
+    this.chatHistory = [];
 
     let loopCount = 0;
     let taskComplete = false;
-    let lastOutput = "";
-    let lastPythonCode = "";
-    let pythonApproved = false;
+    let currentPlan = "";
 
-    // Initial user request in history
     this.chatHistory.push({ role: "user", content: userRequest });
 
     while (!taskComplete && loopCount < this.maxLoops) {
       loopCount++;
       logger.info("orchestrator", `Loop ${loopCount} starting`);
 
-      // 1. Manager decides next step
+      // 1. Manager - Plan and Delegate
       const manager = PERSONAS["manager"];
-      const managerPrompt = await this.getPersonaPrompt(manager);
-      const managerActionPrompt = `Next action for user request: "${userRequest}".
-Current state: ${lastOutput ? "Working on it." : "Just started."}
-Decide which agent to call: ${activePersonaIds.join(", ")} or say "FINISH" to summarize.
-If code was just written, you MUST call the "reviewer".
-If code was APPROVED, you MUST call "manager" again to trigger execution (use command: EXECUTE_PYTHON).`;
+      const managerPrompt = await getSystemContext(manager);
+      const managerActionPrompt = `Current User Request: "${userRequest}"
+Current Plan: ${currentPlan || "None yet. Create one."}
+
+Decide the next step.
+- If no plan exists, write a plan first.
+- Call an agent: ${activePersonaIds.join(", ")}
+- Or use a tool directly.
+- Or FINISH if task is complete.`;
 
       let managerDecision = "";
       await this.engine.generate(managerActionPrompt, {
@@ -89,53 +64,20 @@ If code was APPROVED, you MUST call "manager" again to trigger execution (use co
 
       if (managerDecision.includes("FINISH")) {
         taskComplete = true;
+        // Final memory extraction could happen here
         break;
       }
 
-      // Check for manual execution command from distilled manager logic
-      if (managerDecision.includes("EXECUTE_PYTHON") && pythonApproved && lastPythonCode) {
-          onUpdate({ personaId: "system", content: "Executing Python code..." });
-          try {
-            // Need to capture python logs
-            let pyOutput = "";
-            const originalOnOutput = this.python.onOutput;
-            this.python.onOutput = (out) => {
-              if (out.type === 'log' || out.type === 'error') {
-                pyOutput += (out.message + "\n");
-                onUpdate({
-                  personaId: "python",
-                  content: out.message || "",
-                  type: out.type === 'error' ? 'error' : 'text'
-                });
-              } else if (out.type === 'table' || out.type === 'chart') {
-                onUpdate({
-                  personaId: "python",
-                  content: `[Displaying ${out.type}]`,
-                  type: out.type,
-                  data: out.type === 'table' ? out.data : out.spec
-                });
-              }
-            };
-
-            await this.python.execute(lastPythonCode);
-            this.python.onOutput = originalOnOutput;
-
-            lastOutput = `Python Output:\n${pyOutput}`;
-            this.chatHistory.push({ role: "assistant", content: `[System] ${lastOutput}` });
-            pythonApproved = false; // Reset for next block
-            lastPythonCode = "";
-            continue;
-          } catch (err: any) {
-            lastOutput = `Python Error: ${err.message}`;
-            this.chatHistory.push({ role: "assistant", content: `[System] ${lastOutput}` });
-            pythonApproved = false;
-            lastPythonCode = "";
-            continue;
-          }
+      // Check for Tool Calls from Manager
+      const toolCall = this.parseToolCall(managerDecision);
+      if (toolCall) {
+          const result = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
+          this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall.name} returned: ${result}` });
+          onUpdate({ personaId: "observer", content: `Observed ${toolCall.name} result: ${result}`, type: "observation" });
+          continue;
       }
 
-      // 2. Delegate to an agent based on Manager's decision
-      // We look for agent names in the manager's text
+      // 2. Delegate to Agent
       let delegatedPersonaId = "";
       for (const id of activePersonaIds) {
         if (managerDecision.toLowerCase().includes(id)) {
@@ -145,14 +87,16 @@ If code was APPROVED, you MUST call "manager" again to trigger execution (use co
       }
 
       if (!delegatedPersonaId) {
-        // Default to a fallback or retry
-        logger.warn("orchestrator", "Manager didn't pick a clear agent, falling back to sequential hint");
-        delegatedPersonaId = activePersonaIds[0];
+        logger.warn("orchestrator", "Manager didn't pick a clear agent, continuing loop");
+        continue;
       }
 
       const persona = PERSONAS[delegatedPersonaId];
-      const systemPrompt = await this.getPersonaPrompt(persona);
-      const taskPrompt = `Perform your role for the current task. If you are the Reviewer, check the previous output. If you are the Coder, write the code.`;
+      const personaPrompt = await getSystemContext(persona);
+      const taskPrompt = `Current Task: ${userRequest}
+Your instruction from Manager: ${managerDecision}
+
+Perform your task and call tools if necessary.`;
 
       let agentContent = "";
       await this.engine.generate(taskPrompt, {
@@ -161,26 +105,82 @@ If code was APPROVED, you MUST call "manager" again to trigger execution (use co
           onUpdate({ personaId: delegatedPersonaId, content: text });
         },
         history: this.chatHistory,
-        systemOverride: systemPrompt
+        systemOverride: personaPrompt
       });
 
       this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
-      lastOutput = agentContent;
 
-      const codeMatch = agentContent.match(/```python\n([\s\S]*?)```/);
-      if (codeMatch) {
-        lastPythonCode = codeMatch[1];
+      // Handle Agent Tool Calls
+      const agentToolCall = this.parseToolCall(agentContent);
+      if (agentToolCall) {
+          const result = await this.executeTool(agentToolCall.name, agentToolCall.args, onUpdate);
+          this.chatHistory.push({ role: "assistant", content: `[Observation for ${persona.name}] Tool ${agentToolCall.name} result: ${result}` });
+          onUpdate({ personaId: "observer", content: `Observed ${persona.name}'s use of ${agentToolCall.name}: ${result}`, type: "observation" });
       }
-
-      if (delegatedPersonaId === "reviewer" && agentContent.includes("APPROVED")) {
-        pythonApproved = true;
-      } else if (delegatedPersonaId === "reviewer") {
-        pythonApproved = false;
-      }
-
-      await storage.addMemory(delegatedPersonaId, `I worked on: ${userRequest}. My output: ${agentContent.substring(0, 50)}...`);
     }
 
     return this.chatHistory;
+  }
+
+  private parseToolCall(text: string): { name: string, args: any } | null {
+    const callMatch = text.match(/CALL:\s*(\w+)/);
+    const argsMatch = text.match(/ARGUMENTS:\s*(\{[\s\S]*?\})/);
+
+    if (callMatch && argsMatch) {
+        try {
+            return {
+                name: callMatch[1],
+                args: JSON.parse(argsMatch[1])
+            };
+        } catch (e) {
+            logger.error("orchestrator", "Failed to parse tool arguments", { error: e, text: argsMatch[1] });
+        }
+    }
+    return null;
+  }
+
+  private async executeTool(name: string, args: any, onUpdate: (response: AgentResponse) => void): Promise<string> {
+      logger.info("orchestrator", `Executing tool: ${name}`, args);
+      try {
+          switch (name) {
+              case "vfs_write":
+                  await storage.writeFile(args.path, args.content, args.l0, args.l1);
+                  return `Successfully wrote to ${args.path}`;
+              case "vfs_read":
+                  const content = await storage.readFile(args.path, args.level);
+                  return content || "File not found.";
+              case "vfs_ls":
+                  const files = await storage.listFiles(args.prefix);
+                  return files.join(", ") || "No files found.";
+              case "memory_update":
+                  await storage.addMemory(args.category as MemoryCategory, args.content, args.tags);
+                  return "Memory updated.";
+              case "web_fetch":
+                  // Real web fetch might be blocked by CORS in browser, using a proxy or placeholder
+                  onUpdate({ personaId: "system", content: `Fetching ${args.url}...` });
+                  const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(args.url)}`);
+                  const data = await response.json();
+                  return data.contents.substring(0, 5000); // Truncate for context
+              case "execute_python":
+                  let pyOutput = "";
+                  const originalOnOutput = this.python.onOutput;
+                  this.python.onOutput = (out) => {
+                      if (out.type === 'log' || out.type === 'error') {
+                          pyOutput += (out.message + "\n");
+                          onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
+                      } else if (out.type === 'table' || out.type === 'chart') {
+                          onUpdate({ personaId: "python", content: `[Displaying ${out.type}]`, type: out.type, data: out.type === 'table' ? out.data : out.spec });
+                      }
+                  };
+                  await this.python.execute(args.code);
+                  this.python.onOutput = originalOnOutput;
+                  return pyOutput || "Code executed successfully.";
+              default:
+                  return `Unknown tool: ${name}`;
+          }
+      } catch (err: any) {
+          logger.error("orchestrator", `Tool execution failed: ${name}`, { error: err });
+          return `Error: ${err.message}`;
+      }
   }
 }

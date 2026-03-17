@@ -85,6 +85,8 @@ body {
 .agent-researcher { border-left: 4px solid #5856d6; }
 .agent-slide_writer { border-left: 4px solid #ff9500; }
 .agent-reviewer { border-left: 4px solid #34c759; }
+.agent-observer { border-left: 4px solid #ff2d55; }
+.agent-coder { border-left: 4px solid #af52de; }
 
 .switch-label {
   display: flex;
@@ -210,20 +212,22 @@ button:disabled {
 }
 
 #pythonOutput.output-content,
-#debugLogs.output-content {
+#debugLogs.output-content,
+#contextTab.output-content {
   padding: 0;
   gap: 0;
 }
 
-.logs-header {
+.logs-header, .context-header {
   padding: 0.5rem 1rem;
   background: #222;
   border-bottom: 1px solid #333;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.logs-container {
+.logs-container, .context-container {
   padding: 1rem;
   overflow-y: auto;
   flex: 1;
@@ -316,6 +320,35 @@ th {
   padding: 0.4rem 0.8rem;
   border-radius: 4px;
   border: 1px solid #444;
+}
+
+/* Context VFS Browser */
+.vfs-item {
+  padding: 0.5rem;
+  border-bottom: 1px solid #222;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.vfs-path {
+  color: #0a84ff;
+  font-weight: bold;
+}
+
+.vfs-meta {
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.vfs-content {
+  font-size: 0.8rem;
+  color: #ccc;
+  background: #000;
+  padding: 0.5rem;
+  border-radius: 4px;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 /* Settings Tab */
@@ -429,5 +462,9 @@ th {
   }
   .settings-hint {
     color: #666;
+  }
+  .vfs-content {
+    background: #f0f0f0;
+    color: #333;
   }
 }
