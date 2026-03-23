@@ -83,6 +83,25 @@ export const TOOLS: Record<string, Tool> = {
       },
       required: ["code"]
     }
+  },
+  "delegate": {
+    name: "delegate",
+    description: "Hand off the task to another specialized agent.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent: {
+          type: "string",
+          enum: ["researcher", "coder", "reviewer", "slide_writer", "observer"],
+          description: "The ID of the agent to delegate to."
+        },
+        instruction: {
+          type: "string",
+          description: "Specific instructions for the delegated agent."
+        }
+      },
+      required: ["agent", "instruction"]
+    }
   }
 };
 
