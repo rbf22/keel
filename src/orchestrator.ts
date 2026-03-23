@@ -30,79 +30,28 @@ export class AgentOrchestrator {
 
     let loopCount = 0;
     let taskComplete = false;
-    let currentPlan = "";
 
     this.chatHistory.push({ role: "user", content: userRequest });
 
+    let nextAgentId = "manager";
+    let nextAgentInstruction = userRequest;
+
     while (!taskComplete && loopCount < this.maxLoops) {
       loopCount++;
-      logger.info("orchestrator", `Loop ${loopCount} starting`);
+      logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
 
-      // 1. Manager - Plan and Delegate
-      const manager = PERSONAS["manager"];
-      const managerPrompt = await getSystemContext(manager);
-      const managerActionPrompt = `Current User Request: "${userRequest}"
-Current Plan: ${currentPlan || "None yet. Create one."}
-
-Decide the next step.
-- If no plan exists, write a plan first.
-- Call an agent: ${activePersonaIds.join(", ")}
-- Or use a tool directly.
-- Or FINISH if task is complete.`;
-
-      let managerDecision = "";
-      await this.engine.generate(managerActionPrompt, {
-        onToken: (text) => {
-          managerDecision = text;
-          onUpdate({ personaId: "manager", content: text });
-        },
-        history: this.chatHistory,
-        systemOverride: managerPrompt
-      });
-
-      this.chatHistory.push({ role: "assistant", content: `[Manager] ${managerDecision}` });
-
-      if (managerDecision.includes("FINISH")) {
-        taskComplete = true;
-        // Final memory extraction could happen here
-        break;
-      }
-
-      // Check for Tool Calls from Manager
-      const toolCall = this.parseToolCall(managerDecision);
-      if (toolCall) {
-          const result = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
-          this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall.name} returned: ${result}` });
-          onUpdate({ personaId: "observer", content: `Observed ${toolCall.name} result: ${result}`, type: "observation" });
-          continue;
-      }
-
-      // 2. Delegate to Agent
-      let delegatedPersonaId = "";
-      for (const id of activePersonaIds) {
-        if (managerDecision.toLowerCase().includes(id)) {
-          delegatedPersonaId = id;
-          break;
-        }
-      }
-
-      if (!delegatedPersonaId) {
-        logger.warn("orchestrator", "Manager didn't pick a clear agent, continuing loop");
-        continue;
-      }
-
-      const persona = PERSONAS[delegatedPersonaId];
+      const persona = PERSONAS[nextAgentId];
       const personaPrompt = await getSystemContext(persona);
-      const taskPrompt = `Current Task: ${userRequest}
-Your instruction from Manager: ${managerDecision}
-
-Perform your task and call tools if necessary.`;
+      const taskPrompt = nextAgentId === "manager"
+        ? `Current User Request: "${userRequest}"
+Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
+        : `Your instruction: ${nextAgentInstruction}`;
 
       let agentContent = "";
       await this.engine.generate(taskPrompt, {
         onToken: (text) => {
           agentContent = text;
-          onUpdate({ personaId: delegatedPersonaId, content: text });
+          onUpdate({ personaId: nextAgentId, content: text });
         },
         history: this.chatHistory,
         systemOverride: personaPrompt
@@ -110,12 +59,56 @@ Perform your task and call tools if necessary.`;
 
       this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
 
-      // Handle Agent Tool Calls
-      const agentToolCall = this.parseToolCall(agentContent);
-      if (agentToolCall) {
-          const result = await this.executeTool(agentToolCall.name, agentToolCall.args, onUpdate);
-          this.chatHistory.push({ role: "assistant", content: `[Observation for ${persona.name}] Tool ${agentToolCall.name} result: ${result}` });
-          onUpdate({ personaId: "observer", content: `Observed ${persona.name}'s use of ${agentToolCall.name}: ${result}`, type: "observation" });
+      if (agentContent.includes("FINISH") && nextAgentId === "manager") {
+        taskComplete = true;
+        break;
+      }
+
+      // 3. Automated Observation & Tool Handling
+      const toolCall = this.parseToolCall(agentContent);
+      let toolResult = "";
+      if (toolCall) {
+          if (toolCall.name === "delegate") {
+              nextAgentId = toolCall.args.agent;
+              nextAgentInstruction = toolCall.args.instruction;
+              toolResult = `Delegated to ${nextAgentId} with instructions: ${nextAgentInstruction}`;
+          } else {
+              toolResult = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
+          }
+          this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
+      }
+
+      // Always run Observer after any agent action or tool call
+      const observer = PERSONAS["observer"];
+      const observerPrompt = await getSystemContext(observer);
+      const observerTask = `Analyze the last action by ${persona.name} and the tool result: ${toolResult}. Provide a concise observation for the Manager.`;
+
+      let observation = "";
+      await this.engine.generate(observerTask, {
+        onToken: (text) => {
+          observation = text;
+          onUpdate({ personaId: "observer", content: text, type: "observation" });
+        },
+        history: this.chatHistory,
+        systemOverride: observerPrompt
+      });
+      this.chatHistory.push({ role: "assistant", content: `[Observer] ${observation}` });
+
+      // Post-agent logic (Reviewer automation, etc.)
+      if (nextAgentId === "coder" && !toolCall?.name?.includes("delegate")) {
+          // If coder just finished and didn't delegate yet, we might want to force Reviewer
+          // But our new design prefers Manager control.
+          // However, the prompt says "Reviewer should always run after coder".
+          nextAgentId = "reviewer";
+          nextAgentInstruction = "Review the code written by the Coder.";
+      } else if (nextAgentId !== "manager" && !toolCall?.name) {
+          // If an agent finished without tool call, return to manager
+          nextAgentId = "manager";
+      } else if (toolCall?.name === "delegate") {
+          // nextAgentId is already set above
+      } else {
+          // Default back to manager to decide next step
+          nextAgentId = "manager";
       }
     }
 
