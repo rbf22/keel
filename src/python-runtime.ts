@@ -39,7 +39,7 @@ export class PythonRuntime {
       };
 
       this.worker.onerror = (error) => {
-        console.error('Worker error:', error);
+        logger.error('python', 'Worker error occurred', { error });
         this.onOutput({ type: 'error', message: 'Worker error occurred' });
         reject(error);
       };
