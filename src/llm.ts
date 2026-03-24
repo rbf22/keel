@@ -148,6 +148,10 @@ export class LocalLLMEngine implements ILLMEngine {
 
     this.isGenerating = true;
 
+    // Settle delay to ensure WebLLM worker/tokenizer state is ready
+    // Increased to 250ms for better stability on iPad/slower GPUs
+    await new Promise(resolve => setTimeout(resolve, 250));
+
     const { onToken, history = [], systemOverride } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
 

@@ -28,6 +28,7 @@ export class PythonRuntime {
 
       this.worker.onmessage = (event) => {
         const output: PythonOutput = JSON.parse(event.data);
+        logger.info('python', `Worker output: ${output.type}`, output);
         if (output.type === 'ready') {
           this.isReady = true;
           this.onOutput(output);
