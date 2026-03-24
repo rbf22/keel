@@ -18,6 +18,7 @@ export class AgentOrchestrator {
   private python: PythonRuntime;
   private chatHistory: ChatCompletionMessageParam[] = [];
   private maxLoops = 15;
+  private pendingToolCall: { name: string, args: any } | null = null;
 
   constructor(engine: LLMEngine, python: PythonRuntime) {
     this.engine = engine;
@@ -39,6 +40,9 @@ export class AgentOrchestrator {
     while (!taskComplete && loopCount < this.maxLoops) {
       loopCount++;
       logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
+
+      // Small delay between agent turns to ensure WebLLM state is settled
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       if (nextAgentId === "reviewer" && nextAgentInstruction.includes("Review the Python code")) {
         // Find the last Python code block in chat history to provide better context
@@ -83,6 +87,7 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
           } else if (toolCall.name === "execute_python" && nextAgentId !== "reviewer") {
               // Intercept execute_python if it's not from a reviewer (usually coder)
               // Force delegation to Reviewer first
+              this.pendingToolCall = toolCall;
               nextAgentId = "reviewer";
               nextAgentInstruction = `Review the Python code below and the planned execution. If it looks correct and safe, say "APPROVED" to allow execution. If not, provide fixes.\n\nCode:\n${toolCall.args.code}`;
               toolResult = `Execution pending. Delegated to Reviewer for approval.`;
@@ -113,22 +118,19 @@ Provide a concise observation for the Manager.`;
 
       // Post-agent logic (Reviewer automation, etc.)
       if (persona.id === "reviewer") {
-          if (agentContent.includes("APPROVED")) {
-              // If Reviewer approves, find the last pending code and execute it
-              const lastCoderAction = [...this.chatHistory].reverse().find(m => typeof m.content === 'string' && m.content.includes("CALL: execute_python"));
-              if (lastCoderAction && typeof lastCoderAction.content === 'string') {
-                  const codeMatch = lastCoderAction.content.match(/ARGUMENTS:\s*(\{[\s\S]*?\})/);
-                  if (codeMatch) {
-                      try {
-                          const args = JSON.parse(codeMatch[1]);
-                          toolResult = await this.executeTool("execute_python", args, onUpdate);
-                          this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
-                          // After execution, return to manager
-                          nextAgentId = "manager";
-                      } catch (e) {
-                          logger.error("orchestrator", "Failed to parse code for execution after approval", { error: e });
-                      }
-                  }
+          if (agentContent.includes("APPROVED") && this.pendingToolCall) {
+              // If Reviewer approves, execute the pending tool call
+              try {
+                  toolResult = await this.executeTool(this.pendingToolCall.name, this.pendingToolCall.args, onUpdate);
+                  this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
+                  this.pendingToolCall = null;
+                  // After execution, return to manager
+                  nextAgentId = "manager";
+              } catch (e: any) {
+                  logger.error("orchestrator", "Failed to execute pending tool call after approval", { error: e });
+                  toolResult = `Error executing approved code: ${e.message}`;
+                  this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
+                  this.pendingToolCall = null;
               }
           } else {
               // Not approved, send back to coder
@@ -200,13 +202,14 @@ Provide a concise observation for the Manager.`;
                           pyOutput += (out.message + "\n");
                           onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
                       } else if (out.type === 'table') {
-                          const tableSummary = `[Table with ${out.data?.length || 0} rows. Columns: ${out.data?.[0] ? Object.keys(out.data[0]).join(", ") : "none"}]`;
+                          const columns = out.data?.[0] ? Object.keys(out.data[0]).join(", ") : "none";
+                          const tableSummary = `[Data Table Output: ${out.data?.length || 0} rows, Columns: ${columns}]`;
                           pyOutput += tableSummary + "\n";
-                          onUpdate({ personaId: "python", content: `[Displaying table]`, type: "table", data: out.data });
+                          onUpdate({ personaId: "python", content: tableSummary, type: "table", data: out.data });
                       } else if (out.type === 'chart') {
-                          const chartSummary = `[Vega-Lite Chart: ${JSON.stringify(out.spec).substring(0, 200)}...]`;
+                          const chartSummary = `[Vega-Lite Chart Output: ${JSON.stringify(out.spec).substring(0, 200)}...]`;
                           pyOutput += chartSummary + "\n";
-                          onUpdate({ personaId: "python", content: `[Displaying chart]`, type: "chart", data: out.spec });
+                          onUpdate({ personaId: "python", content: chartSummary, type: "chart", data: out.spec });
                       }
                   };
                   await this.python.execute(args.code);

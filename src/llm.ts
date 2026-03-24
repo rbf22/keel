@@ -146,10 +146,10 @@ export class LocalLLMEngine implements ILLMEngine {
       throw new Error("Generation already in progress");
     }
 
-    // Small delay to ensure WebLLM worker/tokenizer state is settled
-    await new Promise(resolve => setTimeout(resolve, 50));
-
     this.isGenerating = true;
+
+    // Small delay to ensure WebLLM worker/tokenizer state is settled
+    await new Promise(resolve => setTimeout(resolve, 250));
 
     const { onToken, history = [], systemOverride } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
