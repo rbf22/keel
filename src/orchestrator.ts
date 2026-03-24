@@ -40,6 +40,14 @@ export class AgentOrchestrator {
       loopCount++;
       logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
 
+      if (nextAgentId === "reviewer" && nextAgentInstruction.includes("Review the Python code")) {
+        // Find the last Python code block in chat history to provide better context
+        const lastCoderMessage = [...this.chatHistory].reverse().find(m => m.role === "assistant" && typeof m.content === 'string' && m.content.includes("```python"));
+        if (lastCoderMessage && typeof lastCoderMessage.content === 'string') {
+            nextAgentInstruction += `\n\nCode to review:\n${lastCoderMessage.content}`;
+        }
+      }
+
       const persona = PERSONAS[nextAgentId];
       const personaPrompt = await getSystemContext(persona);
       const taskPrompt = nextAgentId === "manager"
@@ -72,16 +80,25 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
               nextAgentId = toolCall.args.agent;
               nextAgentInstruction = toolCall.args.instruction;
               toolResult = `Delegated to ${nextAgentId} with instructions: ${nextAgentInstruction}`;
+          } else if (toolCall.name === "execute_python" && nextAgentId !== "reviewer") {
+              // Intercept execute_python if it's not from a reviewer (usually coder)
+              // Force delegation to Reviewer first
+              nextAgentId = "reviewer";
+              nextAgentInstruction = `Review the Python code below and the planned execution. If it looks correct and safe, say "APPROVED" to allow execution. If not, provide fixes.\n\nCode:\n${toolCall.args.code}`;
+              toolResult = `Execution pending. Delegated to Reviewer for approval.`;
+              this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
           } else {
               toolResult = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
+              this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
           }
-          this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
       }
 
       // Always run Observer after any agent action or tool call
       const observer = PERSONAS["observer"];
       const observerPrompt = await getSystemContext(observer);
-      const observerTask = `Analyze the last action by ${persona.name} and the tool result: ${toolResult}. Provide a concise observation for the Manager.`;
+      const observerTask = `Analyze the last action by ${persona.name} and the tool result: ${toolResult}.
+Also consider any recent Python execution outputs: ${toolResult.includes("Table") || toolResult.includes("Chart") ? "Outputs contain rich data." : ""}
+Provide a concise observation for the Manager.`;
 
       let observation = "";
       await this.engine.generate(observerTask, {
@@ -95,17 +112,38 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
       this.chatHistory.push({ role: "assistant", content: `[Observer] ${observation}` });
 
       // Post-agent logic (Reviewer automation, etc.)
-      if (nextAgentId === "coder" && !toolCall?.name?.includes("delegate")) {
+      if (persona.id === "reviewer") {
+          if (agentContent.includes("APPROVED")) {
+              // If Reviewer approves, find the last pending code and execute it
+              const lastCoderAction = [...this.chatHistory].reverse().find(m => typeof m.content === 'string' && m.content.includes("CALL: execute_python"));
+              if (lastCoderAction && typeof lastCoderAction.content === 'string') {
+                  const codeMatch = lastCoderAction.content.match(/ARGUMENTS:\s*(\{[\s\S]*?\})/);
+                  if (codeMatch) {
+                      try {
+                          const args = JSON.parse(codeMatch[1]);
+                          toolResult = await this.executeTool("execute_python", args, onUpdate);
+                          this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
+                          // After execution, return to manager
+                          nextAgentId = "manager";
+                      } catch (e) {
+                          logger.error("orchestrator", "Failed to parse code for execution after approval", { error: e });
+                      }
+                  }
+              }
+          } else {
+              // Not approved, send back to coder
+              nextAgentId = "coder";
+              nextAgentInstruction = `The Reviewer found issues with your code. Please fix them:\n\n${agentContent}`;
+          }
+      } else if (nextAgentId === "coder" && !toolCall?.name?.includes("delegate") && !toolCall?.name?.includes("execute_python")) {
           // If coder just finished and didn't delegate yet, we might want to force Reviewer
-          // But our new design prefers Manager control.
-          // However, the prompt says "Reviewer should always run after coder".
           nextAgentId = "reviewer";
-          nextAgentInstruction = "Review the code written by the Coder.";
+          nextAgentInstruction = "Review the work written by the Coder.";
       } else if (nextAgentId !== "manager" && !toolCall?.name) {
           // If an agent finished without tool call, return to manager
           nextAgentId = "manager";
-      } else if (toolCall?.name === "delegate") {
-          // nextAgentId is already set above
+      } else if (toolCall?.name === "delegate" || (toolCall?.name === "execute_python" && persona.id === "coder")) {
+          // nextAgentId is already set above for delegation or intercepted execution
       } else {
           // Default back to manager to decide next step
           nextAgentId = "manager";
@@ -161,8 +199,14 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
                       if (out.type === 'log' || out.type === 'error') {
                           pyOutput += (out.message + "\n");
                           onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
-                      } else if (out.type === 'table' || out.type === 'chart') {
-                          onUpdate({ personaId: "python", content: `[Displaying ${out.type}]`, type: out.type, data: out.type === 'table' ? out.data : out.spec });
+                      } else if (out.type === 'table') {
+                          const tableSummary = `[Table with ${out.data?.length || 0} rows. Columns: ${out.data?.[0] ? Object.keys(out.data[0]).join(", ") : "none"}]`;
+                          pyOutput += tableSummary + "\n";
+                          onUpdate({ personaId: "python", content: `[Displaying table]`, type: "table", data: out.data });
+                      } else if (out.type === 'chart') {
+                          const chartSummary = `[Vega-Lite Chart: ${JSON.stringify(out.spec).substring(0, 200)}...]`;
+                          pyOutput += chartSummary + "\n";
+                          onUpdate({ personaId: "python", content: `[Displaying chart]`, type: "chart", data: out.spec });
                       }
                   };
                   await this.python.execute(args.code);
