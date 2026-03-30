@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { HandlerManager } from "./utils/handler-manager";
 
 export interface PythonOutput {
   type: 'log' | 'table' | 'chart' | 'download' | 'error' | 'ready' | 'complete';
@@ -11,12 +12,51 @@ export interface PythonOutput {
 
 export class PythonRuntime {
   private worker: Worker | null = null;
-  public onOutput: (output: PythonOutput) => void;
+  private outputHandlers: HandlerManager<(output: PythonOutput) => void>;
   private isReady = false;
   private executionTimeout = 10000; // 10 seconds
 
   constructor(onOutput: (output: PythonOutput) => void) {
-    this.onOutput = onOutput;
+    // Initialize handler manager with the default handler
+    this.outputHandlers = new HandlerManager(onOutput);
+  }
+  
+  /**
+   * Get the current active output handler
+   */
+  get onOutput(): (output: PythonOutput) => void {
+    return this.outputHandlers.getCurrent();
+  }
+  
+  /**
+   * Set a new output handler (pushes to stack)
+   */
+  set onOutput(handler: (output: PythonOutput) => void) {
+    this.outputHandlers.push(handler);
+  }
+  
+  /**
+   * Restore the previous output handler
+   */
+  restoreHandler(): void {
+    this.outputHandlers.pop();
+  }
+  
+  /**
+   * Execute with a temporary output handler
+   */
+  async withTemporaryOutput<R>(
+    handler: (output: PythonOutput) => void, 
+    fn: () => Promise<R>
+  ): Promise<R> {
+    return this.outputHandlers.withTemporaryHandler(handler, fn);
+  }
+  
+  /**
+   * Get the number of stacked handlers
+   */
+  get handlerCount(): number {
+    return this.outputHandlers.size();
   }
 
   async init() {
@@ -27,7 +67,7 @@ export class PythonRuntime {
       });
 
       this.worker.onmessage = (event) => {
-        const output: PythonOutput = JSON.parse(event.data);
+        const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         logger.info('python', `Worker output: ${output.type}`, output);
         if (output.type === 'ready') {
           this.isReady = true;
@@ -59,7 +99,7 @@ export class PythonRuntime {
       let timeout: any;
 
       const handleMessage = (event: MessageEvent) => {
-        const output: PythonOutput = JSON.parse(event.data);
+        const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (output.type === 'complete' || output.type === 'error') {
           clearTimeout(timeout);
           this.worker!.removeEventListener('message', handleMessage);

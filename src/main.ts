@@ -4,6 +4,11 @@ import { PythonRuntime, type PythonOutput } from './python-runtime'
 import { logger, type LogEntry } from './logger'
 import { storage } from './storage'
 import { AgentOrchestrator } from './orchestrator'
+import { skillsEngine } from './skills/engine'
+import { SkillsDownloader } from './skills/downloader'
+import { skillStorage } from './storage/skills'
+import { modelStorage } from './storage/models'
+import { IndexedDBWrapper } from './storage/indexeddb-wrapper'
 import embed from 'vega-embed'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -20,6 +25,7 @@ app.innerHTML = `
           <button class="tab-btn" data-tab="slides">Slides</button>
           <button class="tab-btn" data-tab="context">Context</button>
           <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
+          <button class="tab-btn" data-tab="skills">Skills</button>
           <button class="tab-btn" data-tab="settings">Settings</button>
           <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
         </div>
@@ -54,21 +60,55 @@ app.innerHTML = `
           <div class="output-log">Python runtime not initialized.</div>
         </div>
 
+        <div class="output-content" id="skillsTab" data-tab-content="skills" style="display: none;">
+          <div class="skills-header">
+            <h3>Skills</h3>
+            <div class="skills-controls">
+              <input type="text" id="skillSearchInput" placeholder="Search skills..." />
+              <button id="installSkillBtn">Install Skill</button>
+              <button id="refreshSkillsBtn">Refresh</button>
+            </div>
+          </div>
+          <div class="skills-content">
+            <div class="skills-list" id="skillsList">
+              <div class="output-log">Loading skills...</div>
+            </div>
+            <div class="skill-details" id="skillDetails" style="display: none;">
+              <h4 id="skillName"></h4>
+              <p id="skillDescription"></p>
+              <div id="skillContent"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="output-content" id="settingsTab" data-tab-content="settings" style="display: none;">
           <div class="settings-container">
             <h3>Settings</h3>
-            <div class="settings-group">
-              <label for="geminiApiKey">Google Gemini API Key</label>
-              <input type="password" id="geminiApiKey" placeholder="Enter your API key...">
-              <p class="settings-hint">Your API key is stored locally in your browser.</p>
+            <div class="settings-subtabs">
+              <button class="subtab-btn active" data-subtab="general">General</button>
+              <button class="subtab-btn" data-subtab="models">Models</button>
             </div>
-            <div class="settings-group">
-              <label class="switch-label">
-                <input type="checkbox" id="onlineModeToggle"> Enable Online Mode (Gemini 1.5 Flash)
-              </label>
-              <p class="settings-hint">When enabled, Keel will use Google Gemini. If it fails or you're offline, it will automatically fall back to the local LLM.</p>
+            <div class="subtab-content active" id="generalSubtab">
+              <div class="settings-group">
+                <label for="geminiApiKey">Google Gemini API Key</label>
+                <input type="password" id="geminiApiKey" placeholder="Enter your API key...">
+                <p class="settings-hint">Your API key is stored locally in your browser.</p>
+              </div>
+              <div class="settings-group">
+                <label class="switch-label">
+                  <input type="checkbox" id="onlineModeToggle"> Enable Online Mode (Gemini 1.5 Flash)
+                </label>
+                <p class="settings-hint">When enabled, Keel will use Google Gemini. If it fails or you're offline, it will automatically fall back to the local LLM.</p>
+              </div>
+              <button id="saveSettingsBtn">Save Settings</button>
             </div>
-            <button id="saveSettingsBtn">Save Settings</button>
+            <div class="subtab-content" id="modelsSubtab" style="display: none;">
+              <div class="settings-group">
+                <h4>Model Storage</h4>
+                <div id="storageUsage">Loading...</div>
+                <div id="modelsList" class="models-list"></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -130,10 +170,24 @@ const multiAgentToggle = document.getElementById('multiAgentToggle')! as HTMLInp
 const personaSelection = document.getElementById('personaSelection')!
 const slidesPreview = document.getElementById('slidesPreview')! as HTMLIFrameElement
 
+// Skills elements
+const skillsList = document.getElementById('skillsList')!
+const skillDetails = document.getElementById('skillDetails')!
+const skillName = document.getElementById('skillName')!
+const skillDescription = document.getElementById('skillDescription')!
+const skillContent = document.getElementById('skillContent')!
+const skillSearchInput = document.getElementById('skillSearchInput')! as HTMLInputElement
+const installSkillBtn = document.getElementById('installSkillBtn')! as HTMLButtonElement
+const refreshSkillsBtn = document.getElementById('refreshSkillsBtn')! as HTMLButtonElement
+
 // Settings elements
 const geminiApiKeyInput = document.getElementById('geminiApiKey')! as HTMLInputElement
 const onlineModeToggle = document.getElementById('onlineModeToggle')! as HTMLInputElement
 const saveSettingsBtn = document.getElementById('saveSettingsBtn')! as HTMLButtonElement
+
+// Model storage elements
+const storageUsage = document.getElementById('storageUsage')!
+const modelsList = document.getElementById('modelsList')!
 
 multiAgentToggle.onchange = () => {
     personaSelection.style.display = multiAgentToggle.checked ? 'flex' : 'none';
@@ -227,22 +281,37 @@ logger.subscribe((entry: LogEntry) => {
 async function refreshVFSDisplay() {
     if (!storage) return;
     vfsContainer.textContent = 'Loading...';
+    
     try {
+        // Access db property using type assertion for private property
+        const storageWithDb = storage as unknown as { db?: IDBDatabase };
+        
+        if (!storageWithDb.db) {
+            vfsContainer.textContent = 'Storage not initialized. Please initialize Keel first.';
+            return;
+        }
+        
+        const isHealthy = await IndexedDBWrapper.checkDatabaseHealth(storageWithDb.db);
+        if (!isHealthy) {
+            vfsContainer.textContent = 'Storage database is not accessible. Please refresh the page.';
+            logger.error('vfs', 'Database health check failed');
+            return;
+        }
+        
         const files = await storage.listFiles();
         vfsContainer.textContent = '';
+        
         if (files.length === 0) {
             vfsContainer.textContent = 'No files in keel://';
             return;
         }
 
-        for (const path of files) {
-            // Need to read file to show details
-            // We can add a more efficient 'getAllFiles' if needed, but for now:
-            const transaction = (storage as any).db.transaction(["vfs"], "readonly");
-            const store = transaction.objectStore("vfs");
-            const request = store.get(path);
-            request.onsuccess = () => {
-                const file = request.result;
+        // Process files in parallel with proper ordering and error handling
+        const results = await IndexedDBWrapper.getMultipleFiles(storageWithDb.db, files);
+        
+        // Display files in original order
+        results.forEach(({ path, file }) => {
+            if (file) {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'vfs-item';
                 itemDiv.innerHTML = `
@@ -251,9 +320,21 @@ async function refreshVFSDisplay() {
                     <div class="vfs-content">${file.content.substring(0, 500)}${file.content.length > 500 ? '...' : ''}</div>
                 `;
                 vfsContainer.appendChild(itemDiv);
-            };
-        }
+            } else {
+                // Show files that couldn't be loaded
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'vfs-item';
+                errorDiv.innerHTML = `
+                    <div class="vfs-path" style="color: #ff453a;">${path}</div>
+                    <div class="vfs-meta" style="color: #ff453a;">Error: Could not load file details</div>
+                `;
+                vfsContainer.appendChild(errorDiv);
+            }
+        });
+        
+        logger.info('vfs', `Successfully displayed ${results.filter(r => r.file).length}/${files.length} files`);
     } catch (err: any) {
+        logger.error('vfs', 'Failed to refresh VFS display', { error: err });
         vfsContainer.textContent = `Error: ${err.message}`;
     }
 }
@@ -444,7 +525,18 @@ initBtn.onclick = async () => {
 
     const enginePromise = engine.init();
 
+    // Initialize LLM converter for JavaScript to Python conversion
     await Promise.all([pythonPromise, enginePromise]);
+    await SkillsDownloader.setLLMEngine(engine);
+
+    // Initialize skills engine
+    await skillsEngine.init();
+    skillsEngine.registerBuiltInSkills();
+    logger.info('system', 'Skills engine initialized');
+    
+    // Load skills display
+    refreshSkillsDisplay();
+    updateStorageUsage();
 
     logger.info('system', 'Initialization successful');
     statusEl.textContent = "Keel Ready"
@@ -460,7 +552,7 @@ initBtn.onclick = async () => {
   }
 }
 
-async function handleSend(overrideText?: string, retryCount = 0) {
+export async function handleSend(overrideText?: string, retryCount = 0) {
   const text = overrideText || userInput.value.trim()
   if (!text || !engine || !python) return
 
@@ -548,16 +640,70 @@ async function handleSend(overrideText?: string, retryCount = 0) {
 
   try {
     let fullText = "";
+    
+    // Add skills context to system prompt
+    const skillsContext = skillsEngine.getSkillsDescription();
+    const systemPrompt = `You are Keel, a local-first AI agent with access to Python execution and skills.\n\nAvailable Skills:\n${skillsContext}\n\nWhen you need to use a skill, format it as: <skill name="skillName">{"param": "value"}</skill>\n\nWhen you need to perform calculations or data analysis, write Python code in triple-backtick blocks.`;
+    
     await engine.generate(text, {
       onToken: (updatedText) => {
         fullText = updatedText;
         assistantDiv.textContent = fullText
         messagesEl.scrollTop = messagesEl.scrollHeight
       },
-      history: chatHistory.slice(0, -1)
+      history: chatHistory.slice(0, -1),
+      systemOverride: systemPrompt
     });
 
     chatHistory.push({ role: 'assistant', content: fullText });
+    
+    // Parse and execute skill calls
+    const skillCalls = skillsEngine.parseSkillCalls(fullText);
+    if (skillCalls.length > 0 && python) {
+      clearPythonOutput();
+      
+      const dualPythonHandler = (output: PythonOutput) => {
+        handlePythonOutput(output, artifactContainer); // Chat
+        handlePythonOutput(output, pythonOutputEl);    // Python Tab
+      };
+      
+      // Push the dual handler onto the stack
+      python.onOutput = dualPythonHandler;
+      
+      try {
+        for (const skillCall of skillCalls) {
+          try {
+            pythonStatusEl.textContent = 'Running skill...';
+            const result = await skillsEngine.executeSkill(
+              skillCall.name, 
+              skillCall.params, 
+              { pythonRuntime: python }
+            );
+            
+            if (result.success) {
+              const resultDiv = document.createElement('div');
+              resultDiv.className = 'output-log';
+              resultDiv.textContent = `Skill ${skillCall.name} result: ${result.output || 'Success'}`;
+              artifactContainer.appendChild(resultDiv);
+            } else {
+              const errorDiv = document.createElement('div');
+              errorDiv.className = 'output-error';
+              errorDiv.textContent = `Skill ${skillCall.name} error: ${result.error}`;
+              artifactContainer.appendChild(errorDiv);
+            }
+          } catch (error: any) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'output-error';
+            errorDiv.textContent = `Skill execution error: ${error.message}`;
+            artifactContainer.appendChild(errorDiv);
+          }
+        }
+      } finally {
+        // Restore the previous handler
+        python.restoreHandler();
+        pythonStatusEl.textContent = 'Ready';
+      }
+    }
 
     // Extract python code blocks
     const pythonRegex = /```python\n([\s\S]*?)```/g;
@@ -569,31 +715,29 @@ async function handleSend(overrideText?: string, retryCount = 0) {
 
     if (codeBlocks.length > 0) {
       clearPythonOutput();
-      const originalHandler = (python as any).onOutput;
+      
       const dualPythonHandler = (output: PythonOutput) => {
         handlePythonOutput(output, artifactContainer); // Chat
         handlePythonOutput(output, pythonOutputEl);    // Python Tab
       };
 
-      for (const code of codeBlocks) {
-        pythonStatusEl.textContent = 'Running...';
-        try {
-          // Temporarily swap handler to capture output inline and in tab
-          (python as any).onOutput = dualPythonHandler;
+      // Push the dual handler onto the stack
+      python.onOutput = dualPythonHandler;
 
-          await python.execute(code);
-          pythonStatusEl.textContent = 'Ready';
-        } catch (err: any) {
-          pythonStatusEl.textContent = 'Error';
-          // Errors are already handled via handlePythonOutput (inline)
+      try {
+        for (const code of codeBlocks) {
+          pythonStatusEl.textContent = 'Running...';
+          try {
+            await python.execute(code);
+            pythonStatusEl.textContent = 'Ready';
+          } catch (err: any) {
+            pythonStatusEl.textContent = 'Error';
+            // Errors are already handled via handlePythonOutput (inline)
 
-          // Automatic error recovery
-          // Restore handler before potential recursive call
-          (python as any).onOutput = originalHandler;
-
-          const logs = logger.getLogs().slice(-10); // Last 10 logs for context
-          const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
-          const recoveryPrompt = `The previous Python code failed with the following error:
+            // Automatic error recovery with proper async error handling
+            const logs = logger.getLogs().slice(-10); // Last 10 logs for context
+            const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
+            const recoveryPrompt = `The previous Python code failed with the following error:
 \`\`\`
 ${err.message}
 \`\`\`
@@ -605,14 +749,32 @@ ${logContext}
 
 Please analyze the error and provide a corrected version of the code.`;
 
-          addMessage(recoveryPrompt, 'user');
-          // Restore handler before potential recursive call
-          (python as any).onOutput = originalHandler;
-          // Use setTimeout to avoid synchronous recursion which might cause stack issues or interference with WebLLM state
-          setTimeout(() => handleSend(recoveryPrompt, retryCount + 1), 0);
-          return; // Exit current handleSend and skip the finally re-enabling logic
-        } finally {
-          (python as any).onOutput = originalHandler;
+            addMessage(recoveryPrompt, 'user');
+            
+            // Restore handler before attempting recovery
+            python.restoreHandler();
+            
+            // Use queueMicrotask for safer async scheduling with error boundaries
+            queueMicrotask(async () => {
+              try {
+                await handleSend(recoveryPrompt, retryCount + 1);
+              } catch (recoveryError: any) {
+                logger.error('main', 'Error recovery failed', { error: recoveryError });
+                addMessage(`Recovery failed: ${recoveryError.message}`, 'assistant');
+                // Ensure controls are re-enabled on recovery failure
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+              }
+            });
+            
+            return; // Exit current handleSend, recovery will handle the rest
+          }
+        }
+      } finally {
+        // Restore the previous handler if not already restored during error recovery
+        if (python.handlerCount > 0) {
+          python.restoreHandler();
         }
       }
     }
@@ -666,3 +828,190 @@ sendBtn.onclick = () => handleSend()
 userInput.onkeypress = (e) => {
   if (e.key === 'Enter') handleSend()
 }
+
+// Skills functionality
+async function refreshSkillsDisplay() {
+  const skills = skillsEngine.getAvailableSkills()
+  
+  if (skills.length === 0) {
+    skillsList.innerHTML = '<div class="output-log">No skills installed. Click "Install Skill" to add skills from GitHub.</div>'
+    return
+  }
+  
+  skillsList.innerHTML = ''
+  
+  for (const skill of skills) {
+    const skillDiv = document.createElement('div')
+    skillDiv.className = 'skill-item'
+    skillDiv.innerHTML = `
+      <div class="skill-header">
+        <h4>${skill.name}</h4>
+        <button class="skill-uninstall-btn" data-skill="${skill.name}">Uninstall</button>
+      </div>
+      <p>${skill.description}</p>
+      ${skill.tags ? `<div class="skill-tags">${skill.tags.map((tag: string) => `<span class="skill-tag">${tag}</span>`).join('')}</div>` : ''}
+    `
+    
+    skillDiv.addEventListener('click', (e) => {
+      if (!(e.target as HTMLElement).classList.contains('skill-uninstall-btn')) {
+        showSkillDetails(skill)
+      }
+    })
+    
+    skillsList.appendChild(skillDiv)
+  }
+  
+  // Add uninstall handlers
+  document.querySelectorAll('.skill-uninstall-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const skillName = (btn as HTMLButtonElement).dataset.skill!
+      if (confirm(`Uninstall skill "${skillName}"?`)) {
+        await skillsEngine.uninstallSkill(skillName)
+        refreshSkillsDisplay()
+      }
+    })
+  })
+}
+
+function showSkillDetails(skill: any) {
+  skillName.textContent = skill.name
+  skillDescription.textContent = skill.description
+  skillContent.innerHTML = `
+    <div class="skill-instructions">
+      <h5>Instructions:</h5>
+      <pre>${skill.instructions}</pre>
+    </div>
+    ${skill.codeBlocks.length > 0 ? `
+      <div class="skill-code">
+        <h5>Code:</h5>
+        ${skill.codeBlocks.map((block: any) => `
+          <div class="code-block">
+            <span class="code-language">${block.language}</span>
+            <pre><code>${block.code}</code></pre>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+  `
+  skillDetails.style.display = 'block'
+}
+
+// Install skill handler
+installSkillBtn.onclick = async () => {
+  const input = prompt('Enter GitHub repository (owner/repo or full URL):')
+  if (!input) return
+  
+  const repo = SkillsDownloader.parseRepoUrl(input)
+  if (!repo) {
+    alert('Invalid repository format. Use "owner/repo" or full GitHub URL.')
+    return
+  }
+  
+  try {
+    installSkillBtn.disabled = true
+    installSkillBtn.textContent = 'Installing...'
+    
+    const skills = await SkillsDownloader.downloadSkills(repo, (progress) => {
+      console.log(`Skill ${progress.skillName}: ${progress.status} - ${progress.progress}%`)
+    })
+    
+    // Save skills to storage
+    for (const skill of skills) {
+      await skillStorage.saveSkill(skill)
+      await skillsEngine.installSkill(skill.name)
+    }
+    
+    refreshSkillsDisplay()
+    alert(`Successfully installed ${skills.length} skill(s)`)
+  } catch (error: any) {
+    alert(`Failed to install skills: ${error.message}`)
+  } finally {
+    installSkillBtn.disabled = false
+    installSkillBtn.textContent = 'Install Skill'
+  }
+}
+
+// Refresh skills handler
+refreshSkillsBtn.onclick = () => {
+  refreshSkillsDisplay()
+}
+
+// Search skills handler
+skillSearchInput.oninput = () => {
+  const query = skillSearchInput.value.toLowerCase()
+  const skillItems = document.querySelectorAll('.skill-item')
+  
+  skillItems.forEach(item => {
+    const text = item.textContent!.toLowerCase()
+    ;(item as HTMLElement).style.display = text.includes(query) ? 'block' : 'none'
+  })
+}
+
+// Storage usage display
+async function updateStorageUsage() {
+  const usage = await modelStorage.getStorageUsage()
+  const usedMB = (usage.used / 1024 / 1024).toFixed(2)
+  const availableMB = (usage.available / 1024 / 1024).toFixed(2)
+  
+  storageUsage.innerHTML = `
+    <p>Used: ${usedMB} MB / ${availableMB} MB</p>
+    <div class="storage-bar">
+      <div class="storage-used" style="width: ${(usage.used / usage.available) * 100}%"></div>
+    </div>
+  `
+  
+  // List models
+  const models = await modelStorage.getAllModels()
+  modelsList.innerHTML = ''
+  
+  for (const model of models) {
+    const modelDiv = document.createElement('div')
+    modelDiv.className = 'model-item'
+    modelDiv.innerHTML = `
+      <div class="model-info">
+        <span class="model-name">${model.modelId}</span>
+        <span class="model-size">${(model.size / 1024 / 1024).toFixed(2)} MB</span>
+        <span class="model-status status-${model.status}">${model.status}</span>
+      </div>
+      ${model.status === 'ready' ? `<button class="model-delete-btn" data-model="${model.modelId}">Delete</button>` : ''}
+    `
+    modelsList.appendChild(modelDiv)
+  }
+  
+  // Add delete handlers
+  document.querySelectorAll('.model-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const modelId = (e.target as HTMLButtonElement).dataset.model!
+      if (confirm(`Delete model "${modelId}"?`)) {
+        await modelStorage.deleteModel(modelId)
+        updateStorageUsage()
+      }
+    })
+  })
+}
+
+// Settings subtabs
+document.querySelectorAll('.subtab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const subtab = (btn as HTMLButtonElement).dataset.subtab!
+    
+    // Update buttons
+    document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'))
+    btn.classList.add('active')
+    
+    // Update content
+    document.querySelectorAll('.subtab-content').forEach(c => {
+      (c as HTMLElement).style.display = 'none'
+    })
+    const activeContent = document.getElementById(`${subtab}Subtab`) as HTMLElement
+    if (activeContent) {
+      activeContent.style.display = 'block'
+    }
+    
+    // Update storage usage when models tab is shown
+    if (subtab === 'models') {
+      updateStorageUsage()
+    }
+  })
+})

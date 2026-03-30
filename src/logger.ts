@@ -3,7 +3,7 @@ export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 export interface LogEntry {
   timestamp: number;
   level: LogLevel;
-  category: 'llm' | 'python' | 'system' | 'orchestrator' | 'storage';
+  category: 'llm' | 'python' | 'system' | 'orchestrator' | 'storage' | 'vfs' | 'main' | 'secure-fetch';
   message: string;
   data?: any;
 }
@@ -41,15 +41,16 @@ class Logger {
 
   subscribe(listener: LogListener) {
     this.listeners.push(listener);
-    // Send existing logs to new subscriber
-    this.logs.forEach(l => listener(l));
+    // Send existing logs to new subscriber (clone to prevent mutation)
+    this.logs.forEach(l => listener({ ...l }));
     return () => {
       this.listeners = this.listeners.filter(l => l !== listener);
     };
   }
 
   getLogs() {
-    return this.logs;
+    // Return cloned logs to prevent external mutation
+    return this.logs.map(l => ({ ...l }));
   }
 }
 

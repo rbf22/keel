@@ -5,6 +5,8 @@ import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 import { PythonRuntime } from "./python-runtime";
 import { getSystemContext } from "./tools";
+import { skillsEngine } from "./skills/engine";
+import { SecureWebFetcher } from "./utils/secure-web-fetcher";
 
 export interface AgentResponse {
   personaId: string;
@@ -19,18 +21,80 @@ export class AgentOrchestrator {
   private chatHistory: ChatCompletionMessageParam[] = [];
   private maxLoops = 15;
   private pendingToolCall: { name: string, args: any } | null = null;
+  
+  // Enhanced loop detection state
+  private agentSequence: string[] = [];
+  private stateHashes: string[] = [];
+  private readonly maxSequenceLength = 10;
+  private readonly maxStateHashes = 20;
 
   constructor(engine: LLMEngine, python: PythonRuntime) {
     this.engine = engine;
     this.python = python;
   }
+  
+  /**
+   * Generate a hash of current state to detect repeating patterns
+   */
+  private hashState(agentId: string, instruction: string): string {
+    // Get last 3 messages from history for context
+    const recentContent = this.chatHistory.slice(-3).map(m => m.content).join('');
+    const stateString = `${agentId}|${instruction}|${recentContent}`;
+    
+    // Simple hash function (could be improved with crypto.subtle if needed)
+    let hash = 0;
+    for (let i = 0; i < stateString.length; i++) {
+      const char = stateString.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString(16);
+  }
+  
+  /**
+   * Detect if we're in a repeating agent cycle
+   */
+  private detectAgentCycle(): boolean {
+    if (this.agentSequence.length < 4) return false;
+    
+    // Get the last 4 agent IDs
+    const recentSequence = this.agentSequence.slice(-4).join(',');
+    
+    // Check if this exact sequence appeared before (excluding the current occurrence)
+    const previousIndex = this.agentSequence.lastIndexOf(
+      recentSequence, 
+      this.agentSequence.length - 5 // Look before the current sequence
+    );
+    
+    return previousIndex > -1;
+  }
+  
+  /**
+   * Detect if we've seen this exact state before
+   */
+  private detectStateRepetition(currentHash: string): boolean {
+    return this.stateHashes.includes(currentHash);
+  }
+  
+  /**
+   * Reset loop detection state (call when task completes or resets)
+   */
+  private resetLoopDetection(): void {
+    this.agentSequence = [];
+    this.stateHashes = [];
+  }
 
   async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "slide_writer", "observer"]) {
     logger.info("orchestrator", "Starting complex task with tools", { userRequest, activePersonaIds });
+    
+    // Reset loop detection state for fresh task
+    this.resetLoopDetection();
     this.chatHistory = [];
 
     let loopCount = 0;
     let taskComplete = false;
+    let lastAgentId = "";
+    let noProgressCount = 0;
 
     this.chatHistory.push({ role: "user", content: userRequest });
 
@@ -40,6 +104,66 @@ export class AgentOrchestrator {
     while (!taskComplete && loopCount < this.maxLoops) {
       loopCount++;
       logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
+      
+      // Enhanced loop detection with state hashing and cycle detection
+      const currentStateHash = this.hashState(nextAgentId, nextAgentInstruction);
+      
+      // Check for exact state repetition
+      if (this.detectStateRepetition(currentStateHash)) {
+        logger.warn("orchestrator", "Detected exact state repetition, terminating task", {
+          loopCount,
+          agentId: nextAgentId,
+          stateHash: currentStateHash
+        });
+        onUpdate({ 
+          personaId: "system", 
+          content: "Task appears to be repeating the same steps. Terminating to prevent infinite execution.", 
+          type: "error" 
+        });
+        break;
+      }
+      
+      // Track state hash (with limit to prevent memory growth)
+      this.stateHashes.push(currentStateHash);
+      if (this.stateHashes.length > this.maxStateHashes) {
+        this.stateHashes.shift();
+      }
+      
+      // Track agent sequence
+      this.agentSequence.push(nextAgentId);
+      if (this.agentSequence.length > this.maxSequenceLength) {
+        this.agentSequence.shift();
+      }
+      
+      // Check for repeating agent cycles
+      if (this.detectAgentCycle()) {
+        logger.warn("orchestrator", "Detected repeating agent cycle, terminating task", {
+          loopCount,
+          sequence: this.agentSequence.slice(-4).join(' -> ')
+        });
+        onUpdate({ 
+          personaId: "system", 
+          content: `Detected repeating agent pattern (${this.agentSequence.slice(-4).join(' -> ')}). Terminating to prevent infinite loop.`, 
+          type: "error" 
+        });
+        break;
+      }
+      
+      // Legacy simple loop detection (kept for compatibility)
+      if (nextAgentId === lastAgentId) {
+        noProgressCount++;
+        if (noProgressCount > 3) {
+          onUpdate({ 
+            personaId: "system", 
+            content: "Task appears to be stuck with the same agent. Terminating to prevent infinite execution.", 
+            type: "error" 
+          });
+          break;
+        }
+      } else {
+        noProgressCount = 0;
+        lastAgentId = nextAgentId;
+      }
 
       // Small delay between agent turns to ensure WebLLM state is settled
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -59,6 +183,10 @@ export class AgentOrchestrator {
 Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
         : `Your instruction: ${nextAgentInstruction}`;
 
+      // Add skills context to system prompt
+      const skillsContext = skillsEngine.getSkillsDescription();
+      const enhancedPersonaPrompt = personaPrompt + `\n\nAvailable Skills:\n${skillsContext}\n\nWhen you need to use a skill, format it as: <skill name="skillName">{"param": "value"}</skill>`;
+      
       let agentContent = "";
       await this.engine.generate(taskPrompt, {
         onToken: (text) => {
@@ -66,7 +194,7 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
           onUpdate({ personaId: nextAgentId, content: text });
         },
         history: this.chatHistory,
-        systemOverride: personaPrompt
+        systemOverride: enhancedPersonaPrompt
       });
 
       this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
@@ -78,7 +206,34 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
 
       // 3. Automated Observation & Tool Handling
       const toolCall = this.parseToolCall(agentContent);
+      const skillCalls = skillsEngine.parseSkillCalls(agentContent);
       let toolResult = "";
+      
+      // Handle skill calls
+      if (skillCalls.length > 0) {
+        for (const skillCall of skillCalls) {
+          try {
+            const result = await skillsEngine.executeSkill(
+              skillCall.name, 
+              skillCall.params, 
+              { pythonRuntime: this.python }
+            );
+            
+            if (result.success) {
+              toolResult += `Skill ${skillCall.name} executed successfully.\n`;
+              if (result.output) {
+                toolResult += `Output: ${result.output}\n`;
+              }
+            } else {
+              toolResult += `Skill ${skillCall.name} failed: ${result.error}\n`;
+            }
+          } catch (error: any) {
+            toolResult += `Error executing skill ${skillCall.name}: ${error.message}\n`;
+          }
+        }
+        this.chatHistory.push({ role: "assistant", content: `[System Observation] Skill execution result: ${toolResult}` });
+      }
+      
       if (toolCall) {
           if (toolCall.name === "delegate") {
               nextAgentId = toolCall.args.agent;
@@ -189,15 +344,34 @@ Provide a concise observation for the Manager.`;
                   await storage.addMemory(args.category as MemoryCategory, args.content, args.tags);
                   return "Memory updated.";
               case "web_fetch":
-                  // Real web fetch might be blocked by CORS in browser, using a proxy or placeholder
+                  // Use secure web fetcher with security measures
                   onUpdate({ personaId: "system", content: `Fetching ${args.url}...` });
-                  const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(args.url)}`);
-                  const data = await response.json();
-                  return data.contents.substring(0, 5000); // Truncate for context
+                  
+                  try {
+                      const content = await SecureWebFetcher.fetch(args.url, {
+                          timeout: 10000,
+                          maxSize: 5000,
+                          sanitizeContent: true
+                      });
+                      
+                      logger.info("orchestrator", `Successfully fetched via secure fetcher`, {
+                          url: args.url,
+                          contentLength: content.length
+                      });
+                      
+                      return content;
+                  } catch (error: any) {
+                      logger.error("orchestrator", "Secure web fetch failed", {
+                          url: args.url,
+                          error: error.message
+                      });
+                      return `Failed to fetch content: ${error.message}`;
+                  }
               case "execute_python":
                   let pyOutput = "";
-                  const originalOnOutput = this.python.onOutput;
-                  this.python.onOutput = (out) => {
+                  
+                  // Create a handler that captures output and sends updates
+                  const outputHandler = (out: any) => {
                       if (out.type === 'log' || out.type === 'error') {
                           pyOutput += (out.message + "\n");
                           onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
@@ -212,8 +386,14 @@ Provide a concise observation for the Manager.`;
                           onUpdate({ personaId: "python", content: chartSummary, type: "chart", data: out.spec });
                       }
                   };
-                  await this.python.execute(args.code);
-                  this.python.onOutput = originalOnOutput;
+                  
+                  // Push handler, execute, then restore
+                  this.python.onOutput = outputHandler;
+                  try {
+                      await this.python.execute(args.code);
+                  } finally {
+                      this.python.restoreHandler();
+                  }
                   return pyOutput || "Code executed successfully.";
               default:
                   return `Unknown tool: ${name}`;

@@ -1,0 +1,354 @@
+import { type StoredSkill } from '../storage/skills'
+import { SkillsParser, CodeBlock } from './parser'
+import { JS_to_Python_Converter } from './parser'
+import { LLMEngine } from '../llm'
+
+export interface GitHubRepo {
+  owner: string
+  repo: string
+  branch?: string
+}
+
+export interface SkillDownloadProgress {
+  skillName: string
+  status: 'downloading' | 'parsing' | 'converting' | 'complete' | 'error'
+  progress: number
+  error?: string
+}
+
+export class SkillsDownloader {
+  private static readonly GITHUB_API_BASE = 'https://api.github.com'
+  private static readonly CORS_PROXIES = [
+    'https://corsproxy.io/?',
+    'https://api.allorigins.win/get?url=',
+    'https://cors-anywhere.herokuapp.com/'
+  ]
+  private static llmEngine: LLMEngine | null = null
+
+  static async setLLMEngine(engine: LLMEngine | null) {
+    this.llmEngine = engine
+    // Update the converter with the new engine
+    if (this.llmEngine) {
+      const { LLMConverter } = await import('./llm-converter')
+      JS_to_Python_Converter.setLLMConverter(new LLMConverter(this.llmEngine))
+    } else {
+      JS_to_Python_Converter.setLLMConverter(null)
+    }
+  }
+  
+  // Parse GitHub URL or owner/repo format
+  static parseRepoUrl(input: string): GitHubRepo | null {
+    // Handle owner/repo format
+    const simpleMatch = input.match(/^([\w-]+)\/([\w-]+)$/)
+    if (simpleMatch) {
+      return { owner: simpleMatch[1], repo: simpleMatch[2] }
+    }
+    
+    // Handle full GitHub URL
+    const urlMatch = input.match(/github\.com\/([\w-]+)\/([\w-]+)(?:\/tree\/(.+))?/)
+    if (urlMatch) {
+      return { 
+        owner: urlMatch[1], 
+        repo: urlMatch[2],
+        branch: urlMatch[3] || 'main'
+      }
+    }
+    
+    return null
+  }
+  
+  // Fetch skills from a GitHub repository
+  static async downloadSkills(
+    repo: GitHubRepo, 
+    onProgress?: (progress: SkillDownloadProgress) => void
+  ): Promise<StoredSkill[]> {
+    const skills: StoredSkill[] = []
+    const branch = repo.branch || await this.getDefaultBranch(repo)
+    
+    try {
+      // Get repository contents
+      const contents = await this.fetchRepoContents(repo, branch)
+      const skillsDir = contents.find(item => item.name === 'skills' && item.type === 'dir')
+      
+      if (!skillsDir) {
+        throw new Error('No skills directory found in repository')
+      }
+      
+      // Get all skills
+      const skillEntries = await this.fetchRepoContents(repo, branch, 'skills')
+      const skillDirs = skillEntries.filter(item => item.type === 'dir')
+      
+      for (const skillDir of skillDirs) {
+        try {
+          onProgress?.({
+            skillName: skillDir.name,
+            status: 'downloading',
+            progress: 0
+          })
+          
+          // Get skill files
+          const skillFiles = await this.fetchRepoContents(repo, branch, `skills/${skillDir.name}`)
+          const skillFile = skillFiles.find(file => file.name === 'SKILL.md')
+          
+          if (!skillFile) {
+            console.warn(`No SKILL.md found in ${skillDir.name}`)
+            continue
+          }
+          
+          // Download skill content
+          onProgress?.({
+            skillName: skillDir.name,
+            status: 'downloading',
+            progress: 25
+          })
+          
+          if (!skillFile.download_url) {
+            throw new Error('No download URL available for skill file')
+          }
+          
+          const content = await this.fetchFileContent(skillFile.download_url)
+          
+          // Parse skill
+          onProgress?.({
+            skillName: skillDir.name,
+            status: 'parsing',
+            progress: 50
+          })
+          
+          const parsed = SkillsParser.parse(content)
+          
+          // Convert JavaScript to Python if needed
+          onProgress?.({
+            skillName: skillDir.name,
+            status: 'converting',
+            progress: 75
+          })
+          
+          let converted = false
+          let conversionMethod: 'simple' | 'llm' = 'simple'
+          
+          const convertedBlocks = await Promise.all(parsed.codeBlocks.map(async (block: CodeBlock) => {
+            if (JS_to_Python_Converter.canConvert(block.language)) {
+              converted = true
+              // Try to determine if LLM was used by checking if the result differs from simple converter
+              const simpleResult = JS_to_Python_Converter.convert(block.code)
+              const finalResult = await JS_to_Python_Converter.convertWithFallback(block.code)
+              
+              if (finalResult !== simpleResult) {
+                conversionMethod = 'llm'
+              }
+              
+              return {
+                ...block,
+                converted: finalResult
+              }
+            }
+            return block
+          }))
+          
+          // Update parsed skill with converted code
+          parsed.codeBlocks = convertedBlocks
+          
+          // Create stored skill
+          const storedSkill = SkillsParser.toStoredSkill(
+            parsed,
+            `https://github.com/${repo.owner}/${repo.repo}`,
+            converted,
+            conversionMethod
+          )
+          
+          skills.push(storedSkill)
+          
+          onProgress?.({
+            skillName: skillDir.name,
+            status: 'complete',
+            progress: 100
+          })
+          
+        } catch (error) {
+          console.error(`Failed to download skill ${skillDir.name}:`, error)
+          onProgress?.({
+            skillName: skillDir.name,
+            status: 'error',
+            progress: 0,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          })
+        }
+      }
+      
+      return skills
+      
+    } catch (error) {
+      console.error('Failed to download skills:', error)
+      throw error
+    }
+  }
+  
+  // Get default branch for repository with CORS handling
+  private static async getDefaultBranch(repo: GitHubRepo): Promise<string> {
+    const url = `${this.GITHUB_API_BASE}/repos/${repo.owner}/${repo.repo}`
+    
+    // Try direct fetch first
+    try {
+      const response = await fetch(url)
+      if (response.ok) {
+        const data = await response.json()
+        return data.default_branch || 'main'
+      }
+    } catch (error) {
+      // Direct fetch failed, try proxies
+    }
+    
+    // Try CORS proxies
+    for (const proxy of this.CORS_PROXIES) {
+      try {
+        const proxyUrl = proxy + encodeURIComponent(url)
+        const response = await fetch(proxyUrl)
+        
+        if (response.ok) {
+          const data = await response.json()
+          if (data.contents) {
+            const repoData = typeof data.contents === 'string' ? JSON.parse(data.contents) : data.contents
+            return repoData.default_branch || 'main'
+          } else if (data.default_branch) {
+            return data.default_branch
+          }
+        }
+      } catch (error) {
+        continue
+      }
+    }
+    
+    // If all else fails, assume 'main'
+    return 'main'
+  }
+  
+  // Fetch repository contents with CORS handling
+  private static async fetchRepoContents(
+    repo: GitHubRepo, 
+    branch: string, 
+    path: string = ''
+  ): Promise<GitHubContent[]> {
+    const url = `${this.GITHUB_API_BASE}/repos/${repo.owner}/${repo.repo}/contents/${path}?ref=${branch}`
+    
+    // Try direct fetch first (might work in some environments)
+    try {
+      const response = await fetch(url)
+      if (response.ok) {
+        return response.json()
+      }
+    } catch (error) {
+      // Direct fetch failed, try proxies
+    }
+    
+    // Try CORS proxies
+    for (const proxy of this.CORS_PROXIES) {
+      try {
+        const proxyUrl = proxy + encodeURIComponent(url)
+        const response = await fetch(proxyUrl)
+        
+        if (response.ok) {
+          const data = await response.json()
+          // Handle different proxy response formats
+          if (data.contents) {
+            return Array.isArray(data.contents) ? data.contents : [data.contents]
+          } else if (Array.isArray(data)) {
+            return data
+          }
+        }
+      } catch (error) {
+        continue
+      }
+    }
+    
+    throw new Error(`Failed to fetch repository contents. The GitHub API may be blocked by CORS in your browser. Please try using a different browser or environment.`)
+  }
+  
+  // Fetch file content with CORS handling
+  private static async fetchFileContent(downloadUrl: string): Promise<string> {
+    // Try direct fetch first
+    try {
+      const response = await fetch(downloadUrl)
+      if (response.ok) {
+        return response.text()
+      }
+    } catch (error) {
+      // Direct fetch failed, try proxies
+    }
+    
+    // Try CORS proxies
+    for (const proxy of this.CORS_PROXIES) {
+      try {
+        const proxyUrl = proxy + encodeURIComponent(downloadUrl)
+        const response = await fetch(proxyUrl)
+        
+        if (response.ok) {
+          const data = await response.json()
+          // Handle different proxy response formats
+          if (data.contents) {
+            return typeof data.contents === 'string' ? data.contents : JSON.stringify(data.contents)
+          } else if (typeof data === 'string') {
+            return data
+          }
+        }
+      } catch (error) {
+        continue
+      }
+    }
+    
+    throw new Error(`Failed to download file. The request may be blocked by CORS in your browser.`)
+  }
+  
+  // Search skills.sh for popular skills
+  static async searchSkills(query?: string): Promise<PopularSkill[]> {
+    // Since skills.sh doesn't have a public API, we'll return some popular ones
+    // In a real implementation, you might scrape or use a proxy API
+    const popularSkills: PopularSkill[] = [
+      {
+        name: 'vercel-react-best-practices',
+        description: 'React and Next.js performance optimization guidelines',
+        repo: 'vercel-labs/agent-skills',
+        tags: ['react', 'nextjs', 'performance', 'vercel']
+      },
+      {
+        name: 'web-design-guidelines',
+        description: 'Review UI code for compliance with web interface best practices',
+        repo: 'vercel-labs/agent-skills',
+        tags: ['ui', 'design', 'accessibility', 'ux']
+      },
+      {
+        name: 'react-native-guidelines',
+        description: 'React Native best practices optimized for AI agents',
+        repo: 'vercel-labs/agent-skills',
+        tags: ['react-native', 'mobile', 'performance']
+      }
+    ]
+    
+    if (query) {
+      const lowerQuery = query.toLowerCase()
+      return popularSkills.filter(skill => 
+        skill.name.toLowerCase().includes(lowerQuery) ||
+        skill.description.toLowerCase().includes(lowerQuery) ||
+        skill.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+      )
+    }
+    
+    return popularSkills
+  }
+}
+
+interface GitHubContent {
+  name: string
+  type: 'file' | 'dir'
+  download_url?: string
+}
+
+export interface PopularSkill {
+  name: string
+  description: string
+  repo: string
+  tags: string[]
+}
+
+// Re-export converter
+export { JS_to_Python_Converter }

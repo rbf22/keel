@@ -1,0 +1,135 @@
+// @ts-nocheck
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { AgentOrchestrator } from './orchestrator'
+import { storage } from './storage'
+
+// Mock dependencies
+vi.mock('./storage', () => ({
+  storage: {
+    init: vi.fn(),
+    getMemories: vi.fn().mockResolvedValue([]),
+    addMemory: vi.fn(),
+    clearMemories: vi.fn(),
+    listFiles: vi.fn().mockResolvedValue([]),
+    getFile: vi.fn(),
+    saveFile: vi.fn(),
+    deleteFile: vi.fn()
+  }
+}))
+
+vi.mock('./tools', () => ({
+  getSystemContext: vi.fn().mockResolvedValue('System context'),
+  TOOLS: {}
+}))
+
+vi.mock('./skills/engine', () => ({
+  skillsEngine: {
+    init: vi.fn(),
+    parseSkillCalls: vi.fn().mockReturnValue([]), // Return empty array by default
+    executeSkill: vi.fn(),
+    getSkillsDescription: vi.fn().mockReturnValue('Calculator: Perform mathematical calculations')
+  }
+}))
+
+vi.mock('./logger', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn()
+  }
+}))
+
+describe('AgentOrchestrator', () => {
+  let orchestrator: AgentOrchestrator
+  let mockEngine: any
+  let mockPython: any
+  let onUpdate: vi.MockedFunction<(response: any) => void>
+
+  beforeEach(async () => {
+    mockEngine = {
+      generate: vi.fn().mockImplementation(async (prompt, options) => {
+        // Simulate the onToken callback being called
+        if (options.onToken) {
+          options.onToken('Task completed successfully. FINISH')
+        }
+        return {
+          content: 'Task completed successfully. FINISH',
+          usage: { prompt_tokens: 10, completion_tokens: 20 }
+        }
+      }),
+      getStats: vi.fn()
+    } as any
+
+    mockPython = {
+      onOutput: vi.fn(),
+      execute: vi.fn(),
+      initialized: false,
+      init: vi.fn(),
+      reset: vi.fn()
+    }
+
+    onUpdate = vi.fn()
+    
+    orchestrator = new AgentOrchestrator(mockEngine, mockPython)
+    
+    // Initialize storage
+    await storage.init()
+  })
+
+  describe('Basic Functionality', () => {
+    it('should create orchestrator instance', () => {
+      expect(orchestrator).toBeInstanceOf(AgentOrchestrator)
+    })
+
+    it('should handle simple task completion', async () => {
+      await orchestrator.runTask('Simple test task', onUpdate, ['coder'])
+
+      expect(onUpdate).toHaveBeenCalledWith({
+        personaId: 'coder',
+        content: 'Task completed successfully.',
+        type: 'text'
+      })
+    })
+
+    it('should add task completion memory', async () => {
+      vi.mocked(mockEngine.generate).mockImplementation(async (prompt, options) => {
+        if (options.onToken) {
+          options.onToken('Task done.')
+        }
+        return {
+          content: 'Task done.',
+          usage: { prompt_tokens: 10, completion_tokens: 10 }
+        }
+      })
+
+      await orchestrator.runTask('Test task', onUpdate, ['coder'])
+
+      expect(storage.addMemory).toHaveBeenCalledWith(
+        'events',
+        expect.stringContaining('Test task'),
+        ['coder'],
+        {}
+      )
+    })
+  })
+
+  describe('Error Handling', () => {
+    it('should handle engine generation errors', async () => {
+      // Create a new mock engine that rejects
+      const errorEngine = {
+        generate: vi.fn().mockRejectedValue(new Error('Engine failed')),
+        getStats: vi.fn()
+      } as any
+      
+      const errorOrchestrator = new AgentOrchestrator(errorEngine, mockPython)
+      
+      await errorOrchestrator.runTask('Test task', onUpdate, ['coder'])
+
+      expect(onUpdate).toHaveBeenCalledWith({
+        personaId: 'system',
+        content: expect.stringContaining('Error during task execution'),
+        type: 'error'
+      })
+    })
+  })
+})
