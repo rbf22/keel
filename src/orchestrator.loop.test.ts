@@ -56,7 +56,9 @@ describe('AgentOrchestrator Loop Detection', () => {
     // Should have received a system error about infinite loop
     const systemMessages = onUpdate.mock.calls.filter((call: any) => call[0].personaId === 'system')
     expect(systemMessages.some(call => 
-      call[0].content.includes('stuck in a loop')
+      call[0].content.includes('appears to be repeating') || 
+      call[0].content.includes('appears to be stuck') ||
+      call[0].content.includes('Detected repeating agent pattern')
     )).toBe(true)
   })
 
@@ -79,7 +81,9 @@ describe('AgentOrchestrator Loop Detection', () => {
     // Should not have loop error (be more flexible)
     const systemMessages = onUpdate.mock.calls.filter((call: any) => call[0].personaId === 'system')
     const loopMessages = systemMessages.filter(call => 
-      call[0].content.includes('stuck in a loop')
+      call[0].content.includes('appears to be repeating') || 
+      call[0].content.includes('appears to be stuck') ||
+      call[0].content.includes('Detected repeating agent pattern')
     )
     // If there are loop messages, ensure the task still completed
     if (loopMessages.length > 0) {

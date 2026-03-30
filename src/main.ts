@@ -744,7 +744,7 @@ ${err.message}
 
 Recent system logs:
 \`\`\`
-${logContext}
+${sanitizeHTML(logContext)}
 \`\`\`
 
 Please analyze the error and provide a corrected version of the code.`;
@@ -796,7 +796,30 @@ Please analyze the error and provide a corrected version of the code.`;
   }
 }
 
+function sanitizeHTML(content: string): string {
+  // Use HTML entity encoding to prevent XSS - escape all HTML special characters
+  return content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 function updateSlidesPreview(content: string) {
+    // Sanitize content before injecting into iframe
+    const sanitizedContent = sanitizeHTML(content);
+    
+    // Extract HTML content if present - more flexible with whitespace
+    let slideContent = sanitizedContent;
+    const htmlMatch = sanitizedContent.match(/```html\s*\n?([\s\S]*?)```/);
+    if (htmlMatch && htmlMatch[1]) {
+        slideContent = htmlMatch[1];
+    }
+    
+    // Further sanitize the slide content
+    slideContent = sanitizeHTML(slideContent);
+    
     // Basic Reveal.js template
     const revealTemplate = `
         <!doctype html>
@@ -808,7 +831,7 @@ function updateSlidesPreview(content: string) {
             <body>
                 <div class="reveal">
                     <div class="slides">
-                        ${content.includes('```html') ? content.match(/```html\n([\s\S]*?)```/)?.[1] || content : content}
+                        ${slideContent}
                     </div>
                 </div>
                 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
@@ -877,23 +900,52 @@ async function refreshSkillsDisplay() {
 function showSkillDetails(skill: any) {
   skillName.textContent = skill.name
   skillDescription.textContent = skill.description
-  skillContent.innerHTML = `
-    <div class="skill-instructions">
-      <h5>Instructions:</h5>
-      <pre>${skill.instructions}</pre>
-    </div>
-    ${skill.codeBlocks.length > 0 ? `
-      <div class="skill-code">
-        <h5>Code:</h5>
-        ${skill.codeBlocks.map((block: any) => `
-          <div class="code-block">
-            <span class="code-language">${block.language}</span>
-            <pre><code>${block.code}</code></pre>
-          </div>
-        `).join('')}
-      </div>
-    ` : ''}
-  `
+  
+  // Build content safely using DOM methods instead of innerHTML
+  const container = document.createElement('div')
+  
+  // Instructions section
+  const instructionsDiv = document.createElement('div')
+  instructionsDiv.className = 'skill-instructions'
+  const instructionsHeader = document.createElement('h5')
+  instructionsHeader.textContent = 'Instructions:'
+  instructionsDiv.appendChild(instructionsHeader)
+  const instructionsPre = document.createElement('pre')
+  instructionsPre.textContent = skill.instructions
+  instructionsDiv.appendChild(instructionsPre)
+  container.appendChild(instructionsDiv)
+  
+  // Code blocks section
+  if (skill.codeBlocks.length > 0) {
+    const codeDiv = document.createElement('div')
+    codeDiv.className = 'skill-code'
+    const codeHeader = document.createElement('h5')
+    codeHeader.textContent = 'Code:'
+    codeDiv.appendChild(codeHeader)
+    
+    for (const block of skill.codeBlocks) {
+      const blockDiv = document.createElement('div')
+      blockDiv.className = 'code-block'
+      
+      const langSpan = document.createElement('span')
+      langSpan.className = 'code-language'
+      langSpan.textContent = block.language
+      blockDiv.appendChild(langSpan)
+      
+      const codePre = document.createElement('pre')
+      const codeEl = document.createElement('code')
+      codeEl.textContent = block.code
+      codePre.appendChild(codeEl)
+      blockDiv.appendChild(codePre)
+      
+      codeDiv.appendChild(blockDiv)
+    }
+    
+    container.appendChild(codeDiv)
+  }
+  
+  skillContent.innerHTML = ''
+  skillContent.appendChild(container)
   skillDetails.style.display = 'block'
 }
 

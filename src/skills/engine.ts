@@ -1,6 +1,6 @@
 import { PythonRuntime, type PythonOutput } from '../python-runtime'
 import { skillStorage } from '../storage/skills'
-import { SkillsParser, ParsedSkill } from './parser'
+import { SkillsParser, ParsedSkill, type CodeBlock } from './parser'
 
 export interface SkillExecutionContext {
   pythonRuntime: PythonRuntime
@@ -258,7 +258,7 @@ except Exception as e:
     
     try {
       // Find Python code blocks (prefer converted if available)
-      const pythonBlock = skill.codeBlocks.find(block => 
+      const pythonBlock = skill.codeBlocks.find((block: CodeBlock) => 
         block.language === 'python' || block.converted
       )
       
@@ -282,6 +282,7 @@ except Exception as e:
       // Create a promise to capture the output with proper race condition handling
       const executionPromise = new Promise<void>((resolve, reject) => {
         const originalOutputHandler = context.pythonRuntime.onOutput
+        let hasResolved = false
         
         // Set handler BEFORE executing
         context.pythonRuntime.onOutput = (output: PythonOutput) => {
@@ -289,15 +290,26 @@ except Exception as e:
             outputResult += output.message + '\n'
           } else if (output.type === 'error' && output.message) {
             errorResult = output.message
+            // Resolve immediately on error - don't wait for complete
+            if (!hasResolved) {
+              hasResolved = true
+              resolve()
+            }
           } else if (output.type === 'complete') {
-            resolve()
+            if (!hasResolved) {
+              hasResolved = true
+              resolve()
+            }
           }
         }
         
         // Execute the code with proper error handling
         context.pythonRuntime.execute(pythonCode).catch((err) => {
-          errorResult = err instanceof Error ? err.message : 'Unknown execution error'
-          reject(err)
+          if (!hasResolved) {
+            hasResolved = true
+            errorResult = err instanceof Error ? err.message : 'Unknown execution error'
+            reject(err)
+          }
         }).finally(() => {
           // Always restore original handler
           context.pythonRuntime.onOutput = originalOutputHandler

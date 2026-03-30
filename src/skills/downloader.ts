@@ -19,9 +19,9 @@ export interface SkillDownloadProgress {
 export class SkillsDownloader {
   private static readonly GITHUB_API_BASE = 'https://api.github.com'
   private static readonly CORS_PROXIES = [
-    'https://corsproxy.io/?',
-    'https://api.allorigins.win/get?url=',
-    'https://cors-anywhere.herokuapp.com/'
+    { url: 'https://api.allorigins.win/get?url=', name: 'allorigins', format: 'allorigins' },
+    { url: 'https://corsproxy.io/?', name: 'corsproxy', format: 'direct' },
+    { url: 'https://cors-anywhere.herokuapp.com/', name: 'cors-anywhere', format: 'direct' }
   ]
   private static llmEngine: LLMEngine | null = null
 
@@ -202,16 +202,22 @@ export class SkillsDownloader {
     // Try CORS proxies
     for (const proxy of this.CORS_PROXIES) {
       try {
-        const proxyUrl = proxy + encodeURIComponent(url)
+        const proxyUrl = proxy.url + encodeURIComponent(url)
         const response = await fetch(proxyUrl)
         
         if (response.ok) {
           const data = await response.json()
-          if (data.contents) {
-            const repoData = typeof data.contents === 'string' ? JSON.parse(data.contents) : data.contents
-            return repoData.default_branch || 'main'
-          } else if (data.default_branch) {
-            return data.default_branch
+          // Use explicit format field to determine parsing strategy
+          if (proxy.format === 'allorigins') {
+            if (data.contents) {
+              const repoData = typeof data.contents === 'string' ? JSON.parse(data.contents) : data.contents
+              return repoData.default_branch || 'main'
+            }
+          } else {
+            // Direct format - data is the response itself
+            if (data.default_branch) {
+              return data.default_branch
+            }
           }
         }
       } catch (error) {
@@ -244,16 +250,21 @@ export class SkillsDownloader {
     // Try CORS proxies
     for (const proxy of this.CORS_PROXIES) {
       try {
-        const proxyUrl = proxy + encodeURIComponent(url)
+        const proxyUrl = proxy.url + encodeURIComponent(url)
         const response = await fetch(proxyUrl)
         
         if (response.ok) {
           const data = await response.json()
-          // Handle different proxy response formats
-          if (data.contents) {
-            return Array.isArray(data.contents) ? data.contents : [data.contents]
-          } else if (Array.isArray(data)) {
-            return data
+          // Use explicit format field to determine parsing strategy
+          if (proxy.format === 'allorigins') {
+            if (data.contents) {
+              return Array.isArray(data.contents) ? data.contents : [data.contents]
+            }
+          } else {
+            // Direct format - data is the response itself
+            if (Array.isArray(data)) {
+              return data
+            }
           }
         }
       } catch (error) {
@@ -279,16 +290,21 @@ export class SkillsDownloader {
     // Try CORS proxies
     for (const proxy of this.CORS_PROXIES) {
       try {
-        const proxyUrl = proxy + encodeURIComponent(downloadUrl)
+        const proxyUrl = proxy.url + encodeURIComponent(downloadUrl)
         const response = await fetch(proxyUrl)
         
         if (response.ok) {
           const data = await response.json()
-          // Handle different proxy response formats
-          if (data.contents) {
-            return typeof data.contents === 'string' ? data.contents : JSON.stringify(data.contents)
-          } else if (typeof data === 'string') {
-            return data
+          // Use explicit format field to determine parsing strategy
+          if (proxy.format === 'allorigins') {
+            if (data.contents) {
+              return typeof data.contents === 'string' ? data.contents : JSON.stringify(data.contents)
+            }
+          } else {
+            // Direct format - data is the content itself
+            if (typeof data === 'string') {
+              return data
+            }
           }
         }
       } catch (error) {

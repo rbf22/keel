@@ -272,23 +272,26 @@ Provide a concise observation for the Manager.`;
       this.chatHistory.push({ role: "assistant", content: `[Observer] ${observation}` });
 
       // Post-agent logic (Reviewer automation, etc.)
+      // Always clear pending tool call when reviewer responds
       if (persona.id === "reviewer") {
           if (agentContent.includes("APPROVED") && this.pendingToolCall) {
               // If Reviewer approves, execute the pending tool call
+              const currentPendingCall = this.pendingToolCall; // Capture before clearing
+              this.pendingToolCall = null; // Clear immediately to prevent re-execution
+              
               try {
-                  toolResult = await this.executeTool(this.pendingToolCall.name, this.pendingToolCall.args, onUpdate);
+                  toolResult = await this.executeTool(currentPendingCall.name, currentPendingCall.args, onUpdate);
                   this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
-                  this.pendingToolCall = null;
                   // After execution, return to manager
                   nextAgentId = "manager";
               } catch (e: any) {
                   logger.error("orchestrator", "Failed to execute pending tool call after approval", { error: e });
                   toolResult = `Error executing approved code: ${e.message}`;
                   this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
-                  this.pendingToolCall = null;
               }
           } else {
               // Not approved, send back to coder
+              this.pendingToolCall = null; // Clear pending call
               nextAgentId = "coder";
               nextAgentInstruction = `The Reviewer found issues with your code. Please fix them:\n\n${agentContent}`;
           }

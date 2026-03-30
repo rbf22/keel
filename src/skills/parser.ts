@@ -245,18 +245,80 @@ export class JS_to_Python_Converter {
     this.llmConverter = converter
   }
 
+  private static extractParenContent(str: string, startIdx: number): string {
+    // Extract content within matching parentheses, handling nesting
+    let depth = 1
+    let i = startIdx
+    while (i < str.length && depth > 0) {
+      if (str[i] === '(') depth++
+      else if (str[i] === ')') depth--
+      i++
+    }
+    return str.substring(startIdx, i - 1)
+  }
+
+  private static replaceConsoleCalls(str: string): { result: string; hasError: boolean } {
+    let result = str
+    let hasError = false
+    const patterns = [
+      { pattern: /console\.error\(/g, method: 'error' as const },
+      { pattern: /console\.log\(/g, method: 'log' as const }
+    ]
+    
+    for (const { pattern, method } of patterns) {
+      // Collect all matches first to avoid index shifting during replacement
+      const matches: Array<{ index: number; length: number; replacement: string }> = []
+      let match
+      while ((match = pattern.exec(result)) !== null) {
+        hasError = hasError || method === 'error'
+        const startIdx = match.index + match[0].length
+        const content = this.extractParenContent(result, startIdx)
+        const replacement = method === 'error' 
+          ? `print(${content}, file=sys.stderr)` 
+          : `print(${content})`
+        
+        // Check for trailing semicolon
+        const endIdx = startIdx + content.length + 1
+        const hasSemicolon = result[endIdx] === ';'
+        const fullMatchEnd = hasSemicolon ? endIdx + 1 : endIdx
+        const matchLength = fullMatchEnd - match.index
+        
+        matches.push({
+          index: match.index,
+          length: matchLength,
+          replacement
+        })
+      }
+      
+      // Replace from right to left to avoid index shifting
+      for (let i = matches.length - 1; i >= 0; i--) {
+        const { index, length, replacement } = matches[i]
+        result = result.substring(0, index) + replacement + result.substring(index + length)
+      }
+    }
+    
+    return { result, hasError }
+  }
+
   static convert(jsCode: string): string {
     let pythonCode = jsCode
+    const imports: string[] = []
     
-    // Add json import if needed
+    // Add json import if needed (will be first)
     if (pythonCode.includes('JSON.parse') || pythonCode.includes('JSON.stringify')) {
-      pythonCode = 'import json\n' + pythonCode
+      imports.push('import json')
+    }
+    
+    // Handle console.log and console.error with nested parentheses support
+    const { result, hasError } = this.replaceConsoleCalls(pythonCode)
+    pythonCode = result
+    
+    if (hasError) {
+      imports.push('import sys')
     }
     
     // Simple replacements
     pythonCode = pythonCode
-      .replace(/console\.log\((.*?)\);?/g, 'print($1)')
-      .replace(/console\.error\((.*?)\);?/g, 'print($1, file=sys.stderr)')
       .replace(/const\s+(\w+)\s*=/g, '$1 =')
       .replace(/let\s+(\w+)\s*=/g, '$1 =')
       .replace(/var\s+(\w+)\s*=/g, '$1 =')
@@ -269,6 +331,11 @@ export class JS_to_Python_Converter {
       .replace(/\{/g, ':')
       .replace(/\}/g, '')
       .replace(/;\s*/g, '\n')
+    
+    // Prepend all imports in deterministic order
+    if (imports.length > 0) {
+      pythonCode = imports.join('\n') + '\n' + pythonCode
+    }
     
     return pythonCode.trim()
   }
