@@ -77,20 +77,19 @@ describe('SkillsDownloader', () => {
     const skills = await SkillsDownloader.searchSkills()
     
     expect(skills).toContainEqual({
-      name: 'vercel-react-best-practices',
-      description: 'React and Next.js performance optimization guidelines',
+      name: 'agent-skills',
+      description: 'Official collection of skills from Vercel Labs (React, UI, etc.)',
       repo: 'vercel-labs/agent-skills',
-      tags: ['react', 'nextjs', 'performance', 'vercel']
+      tags: ['official', 'react', 'nextjs', 'ui', 'vercel']
     })
   })
 
   it('should filter skills by search query', async () => {
     const skills = await SkillsDownloader.searchSkills('react')
     
-    expect(skills).toHaveLength(2)
+    expect(skills).toHaveLength(1)
     const skillNames = skills.map(s => s.name)
-    expect(skillNames).toContain('vercel-react-best-practices')
-    expect(skillNames).toContain('react-native-guidelines')
+    expect(skillNames).toContain('agent-skills')
   })
 
   it('should parse GitHub Enterprise URL', () => {

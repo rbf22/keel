@@ -1,5 +1,5 @@
-import * as webllm from "@mlc-ai/web-llm";
-import { logger } from "./logger";
+import * as webllm from "@mlc-ai/web-llm"
+import { logger } from "./logger"
 
 export async function checkWebGPU() {
   if (!(navigator as unknown as { gpu?: GPU }).gpu) {
@@ -50,23 +50,35 @@ export interface ModelInfo {
   vramRequiredMB?: number;
 }
 
-export const SUPPORTED_MODELS: ModelInfo[] = [
+// Custom model configuration to handle potential fetch failures from default CDNs
+const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
   {
-    modelId: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
-    displayName: "Llama 3.2 3B",
-    vramRequiredMB: 2300,
+    model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
+    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC",
+    model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/SmolLM2-360M-Instruct-q4f16_1-MLC.wasm",
   },
   {
-    modelId: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-    displayName: "Llama 3.2 1B",
-    vramRequiredMB: 900,
+    model_id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+    model: "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC",
+    model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/Llama-3.2-1B-Instruct-q4f16_1-MLC.wasm",
   },
   {
-    modelId: "SmolLM2-360M-Instruct-q4f16_1-MLC",
-    displayName: "SmolLM2 360M",
-    vramRequiredMB: 400,
+    model_id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+    model: "https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC",
+    model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/Llama-3.2-3B-Instruct-q4f16_1-MLC.wasm",
   },
 ];
+
+const CUSTOM_APP_CONFIG: webllm.AppConfig = {
+  model_list: CUSTOM_MODEL_LIST,
+};
+
+// Map web-llm prebuilt models to our ModelInfo format
+export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_MODEL_LIST.map(m => ({
+  modelId: m.model_id,
+  displayName: m.model_id.split('-MLC')[0].replace(/-/g, ' '),
+  vramRequiredMB: m.vram_required_MB,
+}));
 
 export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
 
@@ -118,16 +130,17 @@ export class LocalLLMEngine implements ILLMEngine {
 
       this.onUpdate("Initializing Engine...");
       this.engine = await webllm.CreateMLCEngine(this.modelId, {
+        appConfig: CUSTOM_APP_CONFIG,
         initProgressCallback: (report: webllm.InitProgressReport) => {
           this.onUpdate(`Loading: ${report.text}`);
         },
       });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error("llm", `Failed to initialize local engine: ${errorMessage}`, { error: err });
+      logger.error("llm", `Failed to initialize local engine (${this.modelId}): ${errorMessage}`, { error: err });
       
       if (errorMessage.includes("Failed to fetch")) {
-        throw new Error("Failed to download model files. Please check your internet connection or try a different model.");
+        throw new Error(`Failed to download model files for ${this.modelId}. Please check your internet connection or try a different model.`);
       }
       throw err;
     }

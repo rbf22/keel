@@ -1,12 +1,17 @@
-// Interfaces for skill parsing
-export interface ParsedSkill {
+// Metadata for skill discovery (Level 1)
+export interface SkillMetadata {
   name: string
   description: string
+  tags?: string[]
+  metadata?: Record<string, unknown>
+}
+
+// Full parsed skill (Level 1 + Level 2)
+export interface ParsedSkill extends SkillMetadata {
   instructions: string
   content: string
   codeBlocks: CodeBlock[]
-  tags?: string[]
-  metadata?: Record<string, unknown>
+  resources?: Record<string, string> // Additional files (Level 3)
 }
 
 import { type StoredSkill as StorageStoredSkill } from '../storage/skills'
@@ -31,6 +36,25 @@ export interface StoredSkill {
 // Parse skills from markdown content
 export class SkillsParser {
   static parse(content: string): ParsedSkill {
+    const metadata = this.parseMetadata(content)
+    
+    // Parse the full skill content
+    const parsed: ParsedSkill = {
+      ...metadata,
+      instructions: this.stripCodeBlocks(content.replace(/^---\n[\s\S]*?\n---\n/, '')).trim(),
+      content,
+      codeBlocks: this.extractCodeBlocks(content)
+    }
+    
+    // Validate the parsed skill
+    if (!this.validateSkill(parsed)) {
+      throw new Error('Invalid skill: failed validation')
+    }
+    
+    return parsed
+  }
+
+  static parseMetadata(content: string): SkillMetadata {
     if (!content || typeof content !== 'string') {
       throw new Error('Content must be a non-empty string')
     }
@@ -45,39 +69,29 @@ export class SkillsParser {
     const frontmatter = this.parseSimpleYAML(yamlContent) as Record<string, unknown>
     
     // Extract metadata from frontmatter (handle nested metadata)
-    const { name: _name, description: _description, tags: _tags, metadata: nestedMetadata, license, ...otherFields } = frontmatter
+    const { name, description, tags, metadata: nestedMetadata, license, ...otherFields } = frontmatter
+    
+    // Validate required fields
+    if (!name) {
+      throw new Error('missing required field "name"')
+    }
+    
+    if (!description) {
+      throw new Error('missing required field "description"')
+    }
+
     const metadata: Record<string, unknown> = {
       ...(typeof nestedMetadata === 'object' && nestedMetadata !== null ? (nestedMetadata as Record<string, unknown>) : {}),
       ...otherFields,
       ...(license ? { license } : {})
     }
     
-    // Validate required fields
-    if (!frontmatter.name) {
-      throw new Error('missing required field "name"')
-    }
-    
-    if (!frontmatter.description) {
-      throw new Error('missing required field "description"')
-    }
-
-    // Parse the skill
-    const parsed: ParsedSkill = {
-      name: String(frontmatter.name || ''),
-      description: String(frontmatter.description || ''),
-      instructions: this.stripCodeBlocks(content.replace(/^---\n[\s\S]*?\n---\n/, '')).trim(),
-      content,
-      codeBlocks: this.extractCodeBlocks(content),
-      tags: Array.isArray(frontmatter.tags) ? frontmatter.tags : undefined,
+    return {
+      name: String(name),
+      description: String(description),
+      tags: Array.isArray(tags) ? (tags as string[]) : undefined,
       metadata
     }
-    
-    // Validate the parsed skill
-    if (!this.validateSkill(parsed)) {
-      throw new Error('Invalid skill: failed validation')
-    }
-    
-    return parsed
   }
   
   static parseSimpleYAML(yaml: string): Record<string, unknown> {
@@ -116,105 +130,106 @@ export class SkillsParser {
         continue
       }
       
-      // Check for block scalar start (| or >)
-      const blockStartMatch = line.match(/^(\w+):\s*([|>])\s*$/)
-      if (blockStartMatch) {
-        const key = blockStartMatch[1]
-        
-        // Check if there's actually a next line with more indentation
-        let nextIndentedLineIdx = -1
-        let j = i + 1
-        while (j < lines.length) {
-          if (lines[j].trim()) {
-            const nextIndent = lines[j].search(/\S/)
-            // We assume a block scalar MUST be indented more than the key
-            // The key's indent is line.search(/\S/)
-            if (nextIndent > line.search(/\S/)) {
-              nextIndentedLineIdx = j
-            }
-            break
+    // Handle block scalar start (| or >)
+    const blockStartMatch = line.match(/^(\w+):\s*([|>])([-+])?\s*$/)
+    if (blockStartMatch) {
+      const key = blockStartMatch[1]
+      
+      // Check if there's actually a next line with more indentation
+      let nextIndentedLineIdx = -1
+      let j = i + 1
+      while (j < lines.length) {
+        if (lines[j].trim()) {
+          const nextIndent = lines[j].search(/\S/)
+          // A block scalar MUST be indented more than the key or be at the root
+          const keyIndent = line.search(/\S/)
+          if (nextIndent > keyIndent) {
+            nextIndentedLineIdx = j
           }
-          j++
+          break
         }
+        j++
+      }
 
-        if (nextIndentedLineIdx !== -1) {
-          inMultilineString = true
-          currentKey = key
-          multilineIndent = lines[nextIndentedLineIdx].search(/\S/)
-          continue
-        }
-        // If no indented content follows, treat it as a normal value (handled below)
+      if (nextIndentedLineIdx !== -1) {
+        inMultilineString = true
+        currentKey = key
+        multilineIndent = lines[nextIndentedLineIdx].search(/\S/)
+        continue
+      }
+    }
+      
+    const match = line.match(/^(\w+):\s*(.*)$/)
+    if (match) {
+      const [, key, valueRaw] = match
+      const value = valueRaw.trim()
+      
+      // Validate key
+      if (!key.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/)) {
+        console.warn(`Invalid YAML key: ${key}`)
+        continue
       }
       
-      const match = line.match(/^(\w+):\s*(.*)$/)
-      if (match) {
-        const [, key, value] = match
-        
-        // Validate key
-        if (!key.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/)) {
-          console.warn(`Invalid YAML key: ${key}`)
-          continue
-        }
-        
-        // Handle quoted strings with escape sequences
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-          const unquoted = value.slice(1, -1)
-          // Handle escape sequences
-          const unescaped = unquoted
-            .replace(/\\"/g, '"')
-            .replace(/\\'/g, "'")
-            .replace(/\\n/g, '\n')
-            .replace(/\\t/g, '\t')
-            .replace(/\\\\/g, '\\')
-          result[key] = unescaped
-        } else if (value.startsWith('[') && value.endsWith(']')) {
-          // Handle arrays
-          try {
-            // Parse comma-separated values if not valid JSON
-            if (value.includes(',') && !value.includes('"')) {
-              result[key] = value.slice(1, -1).split(',').map(v => v.trim());
-            } else {
-              result[key] = JSON.parse(value)
-            }
-          } catch {
-            // If JSON.parse fails, try comma-separated
-            if (value.includes(',')) {
-              result[key] = value.slice(1, -1).split(',').map(v => v.trim());
-            } else {
-              result[key] = value
-            }
-          }
-        } else if (value.startsWith('{') && value.endsWith('}')) {
-          // Handle inline objects
-          try {
-            result[key] = JSON.parse(value)
-          } catch {
-            console.warn(`Failed to parse inline object for key ${key}: ${value}`)
-            result[key] = {}
-          }
-        } else if (value === '') {
-          // Empty value could be a nested object or empty array
-          currentKey = key
-          // Check if key suggests it should be an array
-          if (key === 'tags' || key.endsWith('s')) {
-            result[key] = []
+      // Handle quoted strings with escape sequences
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        const unquoted = value.slice(1, -1)
+        // Handle escape sequences
+        const unescaped = unquoted
+          .replace(/\\"/g, '"')
+          .replace(/\\'/g, "'")
+          .replace(/\\n/g, '\n')
+          .replace(/\\t/g, '\t')
+          .replace(/\\\\/g, '\\')
+        result[key] = unescaped
+      } else if (value.startsWith('[') && value.endsWith(']')) {
+        // Handle arrays
+        try {
+          // Parse comma-separated values if not valid JSON
+          if (value.includes(',') && !value.includes('"')) {
+            result[key] = value.slice(1, -1).split(',').map(v => v.trim());
           } else {
-            result[key] = {}
+            result[key] = JSON.parse(value)
           }
-        } else if (!isNaN(Number(value)) && value !== '') {
-          // Handle numbers (including negative and decimals)
-          result[key] = Number(value)
-        } else if (value === 'true' || value === 'false') {
-          // Handle booleans
-          result[key] = value === 'true'
-        } else if (value === 'null' || value === '~') {
-          // Handle null values
-          result[key] = null
-        } else {
-          // Unquoted string
-          result[key] = value
+        } catch {
+          // If JSON.parse fails, try comma-separated
+          if (value.includes(',')) {
+            result[key] = value.slice(1, -1).split(',').map(v => v.trim());
+          } else {
+            result[key] = value
+          }
         }
-      } else if (currentKey && line.includes(':')) {
+      } else if (value.startsWith('{') && value.endsWith('}')) {
+        // Handle inline objects
+        try {
+          result[key] = JSON.parse(value)
+        } catch {
+          console.warn(`Failed to parse inline object for key ${key}: ${value}`)
+          result[key] = {}
+        }
+      } else if (value === '') {
+        // Empty value could be a nested object or empty array
+        currentKey = key
+        // Check if key suggests it should be an array
+        if (key === 'tags' || key.endsWith('s')) {
+          result[key] = []
+        } else {
+          result[key] = {}
+        }
+      } else if (!isNaN(Number(value)) && value !== '') {
+        // Handle numbers (including negative and decimals)
+        result[key] = Number(value)
+      } else if (value === 'true' || value === 'false') {
+        // Handle booleans
+        result[key] = value === 'true'
+      } else if (value === 'null' || value === '~' || value.toLowerCase() === 'none') {
+        // Handle null values
+        result[key] = null
+      } else {
+        // Unquoted string - remove trailing comments if any
+        result[key] = value.split(/\s+#/)[0].trim()
+      }
+    }
+ else if (currentKey && line.includes(':')) {
         // Handle nested properties
         const nestedMatch = line.match(/^\s+(\w+):\s*(.*)$/)
         if (nestedMatch) {
@@ -296,6 +311,7 @@ export class SkillsParser {
       description: parsed.description,
       source,
       content: parsed.content,
+      resources: parsed.resources,
       converted,
       originalLanguage: hasJavaScript ? 'javascript' : undefined,
       conversionMethod: converted ? conversionMethod : undefined,
@@ -326,9 +342,32 @@ export class SkillsParser {
       }
     }
     
-    // Validate name format
-    if (!skill.name.match(/^[a-zA-Z0-9_-]+$/)) {
-      throw new Error('Invalid skill name')
+    // Validate name format (Claude constraints: max 64 chars, lowercase, numbers, hyphens only)
+    if (!skill.name || skill.name.length > 64 || !skill.name.match(/^[a-z0-0-]+$/)) {
+      // Relaxing lowercase slightly for backward compatibility but warning
+      if (skill.name.match(/^[a-zA-Z0-9_-]+$/)) {
+        console.warn(`Skill name "${skill.name}" contains uppercase or underscores which is discouraged in the official format.`)
+      } else {
+        throw new Error(`Invalid skill name: "${skill.name}". Names must be max 64 characters and contain only letters, numbers, and hyphens.`)
+      }
+    }
+    
+    // Validate description (Claude constraint: max 1024 chars, no XML tags)
+    if (skill.description.length > 1024) {
+      throw new Error('Skill description exceeds maximum length of 1024 characters')
+    }
+    
+    if (skill.description.includes('<') || skill.description.includes('>')) {
+      // Basic check for XML-like tags
+      if (/<[a-zA-Z0-9]+.*?>/.test(skill.description)) {
+        throw new Error('Skill description cannot contain XML/HTML tags')
+      }
+    }
+
+    // Reserved words check
+    const reservedWords = ['anthropic', 'claude']
+    if (reservedWords.some(word => skill.name.toLowerCase().includes(word))) {
+      throw new Error(`Skill name cannot contain reserved words: ${reservedWords.join(', ')}`)
     }
     
     // Validate code blocks

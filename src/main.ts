@@ -869,7 +869,7 @@ userInput.onkeypress = (e) => {
 
 // Skills functionality
 async function refreshSkillsDisplay() {
-  const skills = skillsEngine.getAvailableSkills()
+  const skills = skillsEngine.getAvailableSkillsMetadata()
   
   if (skills.length === 0) {
     skillsList.innerHTML = '<div class="output-log">No skills installed. Click "Install Skill" to add skills from GitHub.</div>'
@@ -890,9 +890,14 @@ async function refreshSkillsDisplay() {
       ${skill.tags ? `<div class="skill-tags">${skill.tags.map((tag: string) => `<span class="skill-tag">${tag}</span>`).join('')}</div>` : ''}
     `
     
-    skillDiv.addEventListener('click', (e) => {
+    skillDiv.addEventListener('click', async (e) => {
       if (!(e.target as HTMLElement).classList.contains('skill-uninstall-btn')) {
-        showSkillDetails(skill)
+        const fullSkill = await skillsEngine.getFullSkill(skill.name)
+        if (fullSkill) {
+          showSkillDetails(fullSkill)
+        } else {
+          alert(`Failed to load details for skill: ${skill.name}`)
+        }
       }
     })
     
@@ -977,11 +982,31 @@ installSkillBtn.onclick = async () => {
   
   try {
     installSkillBtn.disabled = true
+    installSkillBtn.textContent = 'Listing...'
+    
+    const availableSkills = await SkillsDownloader.listSkills(repo)
+    
+    if (availableSkills.length === 0) {
+      alert('No skills found in this repository. Ensure it has a "skills" directory with SKILL.md files.')
+      return
+    }
+    
+    // Simple prompt-based selection for now
+    const skillNamesStr = prompt(
+      `Found ${availableSkills.length} skills in ${repo.owner}/${repo.repo}:\n` +
+      availableSkills.map(s => `- ${s.name}`).join('\n') +
+      `\n\nEnter skill names to install (comma-separated, or leave empty for all):`
+    )
+    
+    const selectedNames = skillNamesStr 
+      ? skillNamesStr.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined
+
     installSkillBtn.textContent = 'Installing...'
     
     const skills = await SkillsDownloader.downloadSkills(repo, (progress) => {
       console.log(`Skill ${progress.skillName}: ${progress.status} - ${progress.progress}%`)
-    })
+    }, selectedNames)
     
     // Save skills to storage
     for (const skill of skills) {

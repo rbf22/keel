@@ -6,6 +6,7 @@ export interface StoredSkill {
   description: string
   source: string // GitHub URL
   content: string // SKILL.md content
+  resources?: Record<string, string> // Additional files (Level 3)
   converted: boolean // Whether JS was converted to Python
   originalLanguage?: string // Track source language if converted
   conversionMethod?: 'simple' | 'llm' | 'manual' // Track how it was converted

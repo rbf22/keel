@@ -1,7 +1,7 @@
 import { PythonRuntime } from '../python-runtime'
 import { PythonOutput } from '../types'
 import { skillStorage } from '../storage/skills'
-import { SkillsParser, ParsedSkill, CodeBlock } from './parser'
+import { SkillsParser, ParsedSkill, CodeBlock, SkillMetadata } from './parser.js'
 import { logger } from '../logger'
 
 export interface SkillExecutionContext {
@@ -19,21 +19,22 @@ export interface SkillExecutionResult {
 }
 
 export class SkillsEngine {
-  private skills = new Map<string, ParsedSkill>()
+  private skillMetadata = new Map<string, SkillMetadata>()
+  private loadedSkills = new Map<string, ParsedSkill>()
   private initialized = false
   
   async init(): Promise<void> {
-    // Load all stored skills
+    // Load all stored skills metadata first (Level 1)
     const storedSkills = await skillStorage.getAllSkills()
     const failedSkills: string[] = []
     
     for (const stored of storedSkills) {
       try {
-        const parsed = SkillsParser.parse(stored.content)
-        this.skills.set(stored.name, parsed)
+        const metadata = SkillsParser.parseMetadata(stored.content)
+        this.skillMetadata.set(stored.name, metadata)
       } catch (error) {
         const skillName = stored.name || 'unknown'
-        console.error(`Failed to load skill ${skillName}:`, error)
+        console.error(`Failed to load skill metadata for ${skillName}:`, error)
         failedSkills.push(skillName)
       }
     }
@@ -42,15 +43,15 @@ export class SkillsEngine {
     
     // Log summary of initialization
     if (failedSkills.length > 0) {
-      logger.warn('skills', 'Some skills failed to load', {
+      logger.warn('skills', 'Some skills failed to load metadata', {
         totalSkills: storedSkills.length,
         failedCount: failedSkills.length,
         failedSkills
       })
     }
     
-    logger.info('skills', 'Skills engine initialized', {
-      totalLoaded: this.skills.size,
+    logger.info('skills', 'Skills engine initialized with metadata', {
+      totalMetadataLoaded: this.skillMetadata.size,
       totalFailed: failedSkills.length
     })
   }
@@ -58,14 +59,20 @@ export class SkillsEngine {
   // Register built-in skills
   registerBuiltInSkills(): void {
     // Calculator skill
-    this.registerSkill({
-      name: 'calculator',
-      description: 'Perform mathematical calculations and evaluations',
-      content: `---\nname: calculator\ndescription: Perform mathematical calculations and evaluations\n---\n\nUse this skill when you need to:\n- Calculate mathematical expressions\n- Evaluate formulas\n- Perform numeric computations\n\nSimply provide the expression to evaluate.`,
-      instructions: `Use this skill when you need to:\n- Calculate mathematical expressions\n- Evaluate formulas\n- Perform numeric computations\n\nSimply provide the expression to evaluate.`,
-      codeBlocks: [{
-        language: 'python',
-        code: `# Calculator skill
+    const calculatorContent = `---
+name: calculator
+description: Perform mathematical calculations and evaluations. Use when you need to calculate expressions, evaluate formulas, or perform numeric computations.
+---
+
+Use this skill when you need to:
+- Calculate mathematical expressions
+- Evaluate formulas
+- Perform numeric computations
+
+Simply provide the expression to evaluate.
+
+\`\`\`python
+# Calculator skill
 import math
 import numpy as np
 import ast
@@ -188,19 +195,24 @@ try:
     else:
         print("Failed to evaluate expression")
 except Exception as e:
-    print(f"Error: {e}")`
-      }]
-    })
+    print(f"Error: {e}")
+\`\`\``
+    this.registerSkill(SkillsParser.parse(calculatorContent))
     
     // Data analysis skill
-    this.registerSkill({
-      name: 'analyze_data',
-      description: 'Perform advanced data analysis using pandas',
-      content: `---\nname: analyze_data\ndescription: Perform advanced data analysis using pandas\n---\n\nUse this skill when you need to:\n- Group and aggregate data\n- Filter and sort datasets\n- Calculate statistics\n- Clean and transform data`,
-      instructions: `Use this skill when you need to:\n- Group and aggregate data\n- Filter and sort datasets\n- Calculate statistics\n- Clean and transform data`,
-      codeBlocks: [{
-        language: 'python',
-        code: `import pandas as pd
+    const analyzeDataContent = `---
+name: analyze-data
+description: Perform advanced data analysis using pandas. Use when you need to group, aggregate, filter, sort, or clean datasets.
+---
+
+Use this skill when you need to:
+- Group and aggregate data
+- Filter and sort datasets
+- Calculate statistics
+- Clean and transform data
+
+\`\`\`python
+import pandas as pd
 import numpy as np
 
 # Load data
@@ -208,26 +220,50 @@ df = pd.DataFrame({{data}})
 
 # Perform analysis
 result = df.describe()
-log("Data Analysis Result:")
-log(result)
-`
-      }]
-    })
+print("Data Analysis Result:")
+print(result)
+\`\`\``
+    this.registerSkill(SkillsParser.parse(analyzeDataContent))
   }
   
   // Register a skill
   registerSkill(skill: ParsedSkill): void {
-    this.skills.set(skill.name, skill)
+    this.skillMetadata.set(skill.name, {
+      name: skill.name,
+      description: skill.description,
+      tags: skill.tags,
+      metadata: skill.metadata
+    })
+    this.loadedSkills.set(skill.name, skill)
   }
   
-  // Get all available skills
-  getAvailableSkills(): ParsedSkill[] {
-    return Array.from(this.skills.values())
+  // Get all available skills (metadata only for Level 1 disclosure)
+  getAvailableSkillsMetadata(): SkillMetadata[] {
+    return Array.from(this.skillMetadata.values())
+  }
+
+  // Get full skill (loads from storage if needed - Level 2 disclosure)
+  async getFullSkill(name: string): Promise<ParsedSkill | undefined> {
+    if (this.loadedSkills.has(name)) {
+      return this.loadedSkills.get(name)
+    }
+
+    const stored = await skillStorage.getSkill(name)
+    if (!stored) return undefined
+
+    try {
+      const parsed = SkillsParser.parse(stored.content)
+      this.loadedSkills.set(name, parsed)
+      return parsed
+    } catch (error) {
+      logger.error('skills', `Failed to load full skill content for ${name}`, { error })
+      return undefined
+    }
   }
   
-  // Get skill descriptions for LLM context
+  // Get skill descriptions for LLM context (Level 1)
   getSkillsDescription(): string {
-    return Array.from(this.skills.values())
+    return Array.from(this.skillMetadata.values())
       .map(s => `- ${s.name}: ${s.description}`)
       .join('\n')
   }
@@ -265,43 +301,44 @@ log(result)
     if (!this.initialized) {
       await this.init()
     }
-    
-    const skill = this.skills.get(skillName)
+
+    // Load full skill on demand (Level 2 disclosure)
+    const skill = await this.getFullSkill(skillName)
     if (!skill) {
       return {
         success: false,
         error: `Skill not found: ${skillName}`
       }
     }
-    
+
     try {
       // Find Python code blocks (prefer converted if available)
       const pythonBlock = skill.codeBlocks.find((block: CodeBlock) => 
         block.language === 'python' || block.converted
       )
-      
+
       if (!pythonBlock) {
         return {
           success: false,
           error: `No Python code found in skill: ${skillName}`
         }
       }
-      
+
       // Use converted code if available
       let pythonCode = pythonBlock.converted || pythonBlock.code
-      
+
       // Interpolate parameters
       pythonCode = this.interpolateParams(pythonCode, params)
-      
+
       // Execute in Python runtime
       let outputResult = ''
       let errorResult: string | undefined
-      
+
       // Create a promise to capture the output with proper race condition handling
       const executionPromise = new Promise<void>((resolve, reject) => {
         const originalOutputHandler = context.pythonRuntime.onOutput
         let hasResolved = false
-        
+
         // Set handler BEFORE executing
         context.pythonRuntime.onOutput = (output: PythonOutput) => {
           if (output.type === 'log' && output.message) {
@@ -320,7 +357,7 @@ log(result)
             }
           }
         }
-        
+
         // Execute the code with proper error handling
         context.pythonRuntime.execute(pythonCode)
           .catch((err: unknown) => {
@@ -335,23 +372,23 @@ log(result)
             context.pythonRuntime.onOutput = originalOutputHandler
           })
       })
-      
+
       // Wait for execution with timeout (configurable, default 30 seconds)
       const timeoutMs = context.timeout || 30000;
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error(`Skill execution timeout after ${timeoutMs}ms`)), timeoutMs)
       })
-      
+
       // Race the execution against timeout with proper cleanup
       await Promise.race([executionPromise, timeoutPromise])
-      
+
       return {
         success: !errorResult,
         output: outputResult || '',
         pythonCode,
         error: errorResult
       }
-      
+
     } catch (error) {
       return {
         success: false,
@@ -359,7 +396,7 @@ log(result)
       }
     }
   }
-  
+
   // Interpolate parameters into code
   private interpolateParams(code: string, params: Record<string, unknown>): string {
     let result = code
@@ -396,7 +433,8 @@ log(result)
   
   // Uninstall a skill
   async uninstallSkill(skillName: string): Promise<void> {
-    this.skills.delete(skillName)
+    this.skillMetadata.delete(skillName)
+    this.loadedSkills.delete(skillName)
     await skillStorage.deleteSkill(skillName)
   }
 }

@@ -1,5 +1,5 @@
 import { type StoredSkill } from '../storage/skills'
-import { SkillsParser, CodeBlock, JS_to_Python_Converter } from './parser'
+import { SkillsParser, CodeBlock, JS_to_Python_Converter } from './parser.js'
 import { LLMEngine } from '../llm'
 
 export interface GitHubRepo {
@@ -108,7 +108,8 @@ export class SkillsDownloader {
   // Fetch skills from a GitHub repository
   static async downloadSkills(
     repo: GitHubRepo, 
-    onProgress?: (progress: SkillDownloadProgress) => void
+    onProgress?: (progress: SkillDownloadProgress) => void,
+    skillNames?: string[]
   ): Promise<StoredSkill[]> {
     const skills: StoredSkill[] = []
     const branch = repo.branch || await this.getDefaultBranch(repo)
@@ -124,7 +125,15 @@ export class SkillsDownloader {
       
       // Get all skills
       const skillEntries = await this.fetchRepoContents(repo, branch, 'skills')
-      const skillDirs = skillEntries.filter(item => item.type === 'dir')
+      let skillDirs = skillEntries.filter(item => item.type === 'dir')
+      
+      // Filter by skill names if provided
+      if (skillNames && skillNames.length > 0) {
+        skillDirs = skillDirs.filter(dir => skillNames.includes(dir.name))
+        if (skillDirs.length === 0) {
+          throw new Error(`None of the specified skills (${skillNames.join(', ')}) were found in the repository`)
+        }
+      }
       
       for (const skillDir of skillDirs) {
         try {
@@ -363,28 +372,61 @@ export class SkillsDownloader {
     throw new Error(`Failed to download file. The request may be blocked by CORS in your browser.`)
   }
   
+  // List available skills in a repository
+  static async listSkills(repo: GitHubRepo): Promise<Array<{ name: string, description?: string }>> {
+    const branch = repo.branch || await this.getDefaultBranch(repo)
+    
+    try {
+      const contents = await this.fetchRepoContents(repo, branch)
+      const skillsDir = contents.find(item => item.name === 'skills' && item.type === 'dir')
+      
+      if (!skillsDir) {
+        return []
+      }
+      
+      const skillEntries = await this.fetchRepoContents(repo, branch, 'skills')
+      return skillEntries
+        .filter(item => item.type === 'dir')
+        .map(item => ({ name: item.name }))
+    } catch (error) {
+      console.error('Failed to list skills:', error)
+      return []
+    }
+  }
+
   // Search skills.sh for popular skills
   static async searchSkills(query?: string): Promise<PopularSkill[]> {
-    // Since skills.sh doesn't have a public API, we'll return some popular ones
-    // In a real implementation, you might scrape or use a proxy API
+    // These are official and popular skills from the skills.sh ecosystem
     const popularSkills: PopularSkill[] = [
       {
-        name: 'vercel-react-best-practices',
-        description: 'React and Next.js performance optimization guidelines',
+        name: 'agent-skills',
+        description: 'Official collection of skills from Vercel Labs (React, UI, etc.)',
         repo: 'vercel-labs/agent-skills',
-        tags: ['react', 'nextjs', 'performance', 'vercel']
+        tags: ['official', 'react', 'nextjs', 'ui', 'vercel']
       },
       {
-        name: 'web-design-guidelines',
-        description: 'Review UI code for compliance with web interface best practices',
-        repo: 'vercel-labs/agent-skills',
-        tags: ['ui', 'design', 'accessibility', 'ux']
+        name: 'claude-code-skills',
+        description: 'Skills optimized for Claude Code and terminal agents',
+        repo: 'anthropics/claude-code',
+        tags: ['anthropic', 'terminal', 'coding']
       },
       {
-        name: 'react-native-guidelines',
-        description: 'React Native best practices optimized for AI agents',
+        name: 'web-search',
+        description: 'Search the web using various providers',
         repo: 'vercel-labs/agent-skills',
-        tags: ['react-native', 'mobile', 'performance']
+        tags: ['search', 'web', 'tools']
+      },
+      {
+        name: 'github-tools',
+        description: 'Interact with GitHub repositories and issues',
+        repo: 'vercel-labs/agent-skills',
+        tags: ['github', 'git', 'dev-tools']
+      },
+      {
+        name: 'file-management',
+        description: 'Advanced file system operations for agents',
+        repo: 'vercel-labs/agent-skills',
+        tags: ['fs', 'files', 'utils']
       }
     ]
     
@@ -393,7 +435,8 @@ export class SkillsDownloader {
       return popularSkills.filter(skill => 
         skill.name.toLowerCase().includes(lowerQuery) ||
         skill.description.toLowerCase().includes(lowerQuery) ||
-        skill.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+        skill.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
+        skill.repo.toLowerCase().includes(lowerQuery)
       )
     }
     
