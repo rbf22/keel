@@ -122,7 +122,7 @@ describe('SkillsRegistry', () => {
 
       expect(consoleSpy).toHaveBeenCalledWith(
         'Failed to load skill invalid-skill:',
-        expect.any(Error)
+        'Parse error'
       )
 
       const skills = registry.getAll()

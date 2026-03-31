@@ -39,8 +39,9 @@ export class SkillsRegistry {
             this.skillHashes.set(stored.name, contentHash)
           }
         }
-      } catch (error) {
-        console.error(`Failed to load skill ${stored.name}:`, error)
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Failed to load skill ${stored.name}:`, errorMessage)
       }
     }
 
@@ -125,7 +126,7 @@ export class SkillsRegistry {
       skill.name.toLowerCase().includes(lowerQuery) ||
       skill.description.toLowerCase().includes(lowerQuery) ||
       skill.instructions.toLowerCase().includes(lowerQuery) ||
-      skill.tags?.some(t => t.toLowerCase().includes(lowerQuery))
+      skill.tags?.some((t: string) => t.toLowerCase().includes(lowerQuery))
     )
   }
 

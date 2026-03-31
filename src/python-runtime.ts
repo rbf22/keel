@@ -1,14 +1,6 @@
 import { logger } from "./logger";
 import { HandlerManager } from "./utils/handler-manager";
-
-export interface PythonOutput {
-  type: 'log' | 'table' | 'chart' | 'download' | 'error' | 'ready' | 'complete';
-  message?: string;
-  data?: unknown[];
-  spec?: unknown;
-  filename?: string;
-  content?: string;
-}
+import { PythonOutput } from "./types";
 
 export class PythonRuntime {
   private worker: Worker | null = null;
@@ -16,6 +8,13 @@ export class PythonRuntime {
   private isReady = false;
   private executionTimeout = 10000; // 10 seconds
   private currentTimeout: number | undefined = undefined;
+  private executionQueue: Array<{
+    code: string;
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }> = [];
+  private isExecuting = false;
+  private currentReject: ((error: Error) => void) | null = null;
 
   constructor(onOutput: (output: PythonOutput) => void) {
     // Initialize handler manager with the default handler
@@ -93,21 +92,60 @@ export class PythonRuntime {
       throw new Error('Python runtime not ready');
     }
 
+    // Add to queue and wait for turn
+    return new Promise<void>((resolve, reject) => {
+      this.executionQueue.push({ code, resolve, reject });
+      void this.processQueue();
+    });
+  }
+
+  private async processQueue() {
+    if (this.isExecuting || this.executionQueue.length === 0) {
+      return;
+    }
+
+    const task = this.executionQueue.shift();
+    if (!task) return;
+
+    this.isExecuting = true;
+    try {
+      if (!this.worker || !this.isReady) {
+        throw new Error('Python runtime terminated or not ready');
+      }
+      await this.internalExecute(task.code);
+      task.resolve();
+    } catch (error) {
+      task.reject(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      this.isExecuting = false;
+      void this.processQueue();
+    }
+  }
+
+  private async internalExecute(code: string) {
+    if (!this.worker) {
+      throw new Error('Python worker lost during execution');
+    }
+
     logger.info('python', 'Executing code', { code });
     const startTime = performance.now();
 
     return new Promise<void>((resolve, reject) => {
+      this.currentReject = reject;
       let timeout: number | undefined;
 
       const handleMessage = (event: MessageEvent) => {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (output.type === 'complete' || output.type === 'error') {
+          // Clear current reject
+          this.currentReject = null;
+          
           // Clear timeout and remove listener
           if (timeout !== undefined) {
             clearTimeout(timeout);
             timeout = undefined;
           }
-          this.worker!.removeEventListener('message', handleMessage);
+          this.worker?.removeEventListener('message', handleMessage);
           
           if (output.type === 'complete') {
             const duration = performance.now() - startTime;
@@ -129,8 +167,9 @@ export class PythonRuntime {
         if (this.currentTimeout === timeout && this.worker) {
           // Remove event listener first to prevent memory leaks
           this.worker.removeEventListener('message', handleMessage);
-          // Clear the timeout reference
-          this.currentTimeout = undefined;
+          // Clear current reject
+          this.currentReject = null;
+          
           // Terminate the worker
           this.terminate();
           // Send error output
@@ -147,6 +186,22 @@ export class PythonRuntime {
     if (this.currentTimeout !== undefined) {
       clearTimeout(this.currentTimeout);
       this.currentTimeout = undefined;
+    }
+    
+    // Reject currently executing task
+    if (this.currentReject) {
+      this.currentReject(new Error('Python runtime terminated'));
+      this.currentReject = null;
+    }
+    
+    // Reject all pending tasks in the queue
+    const error = new Error('Python runtime terminated');
+    const pendingTasks = [...this.executionQueue];
+    this.executionQueue = [];
+    this.isExecuting = false;
+    
+    for (const task of pendingTasks) {
+      task.reject(error);
     }
     
     if (this.worker) {

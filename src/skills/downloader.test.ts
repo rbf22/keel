@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { SkillsDownloader } from './downloader'
+import { SkillsDownloader, GitHubRepo } from './downloader'
 
 // Mock fetch
 const mockFetch = vi.fn()
@@ -93,17 +93,77 @@ describe('SkillsDownloader', () => {
     expect(skillNames).toContain('react-native-guidelines')
   })
 
-  it('should get default branch', async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ default_branch: 'develop' })
-    } as Response)
+  it('should parse GitHub Enterprise URL', () => {
+    const repo = SkillsDownloader.parseRepoUrl('https://github.internal.company.com/owner/repo')
     
-    const branch = await (SkillsDownloader as any).getDefaultBranch({
+    expect(repo).toEqual({
       owner: 'owner',
-      repo: 'repo'
+      repo: 'repo',
+      branch: 'main'
     })
+  })
+
+  it('should parse git protocol URL', () => {
+    const repo = SkillsDownloader.parseRepoUrl('git://github.com/owner/repo.git')
     
-    expect(branch).toBe('develop')
+    expect(repo).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: 'main'
+    })
+  })
+
+  it('should parse SSH protocol URL', () => {
+    const repo = SkillsDownloader.parseRepoUrl('ssh://git@github.com/owner/repo.git')
+    
+    expect(repo).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: 'main'
+    })
+  })
+
+  it('should handle proxy failover during download', async () => {
+    const repo: GitHubRepo = { owner: 'owner', repo: 'repo', branch: 'main' }
+    
+    // Mock first proxy failing, second proxy succeeding
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response) // Direct fail
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response) // allorigins fail
+      .mockResolvedValueOnce({ 
+        ok: true, 
+        json: () => Promise.resolve({ default_branch: 'main' }) 
+      } as Response) // corsproxy success
+      
+    const branch = await (SkillsDownloader as any).getDefaultBranch(repo)
+    expect(branch).toBe('main')
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('should handle all proxies failing', async () => {
+    const repo: GitHubRepo = { owner: 'owner', repo: 'repo' }
+    
+    mockFetch.mockResolvedValue({ ok: false, status: 404 } as Response)
+    
+    // Should fallback to 'main' if everything fails in getDefaultBranch
+    const branch = await (SkillsDownloader as any).getDefaultBranch(repo)
+    expect(branch).toBe('main')
+  })
+
+  it('should handle malformed allorigins response', async () => {
+    const repo: GitHubRepo = { owner: 'owner', repo: 'repo' }
+    
+    // allorigins proxy is at index 0 in CORS_PROXIES (after direct attempt)
+    // Actually direct is tried first, then proxies
+    mockFetch
+      .mockResolvedValueOnce({ ok: false } as Response) // Direct
+      .mockResolvedValueOnce({ 
+        ok: true, 
+        json: () => Promise.resolve({ contents: 'not-json' }) 
+      } as Response) // allorigins returns bad data
+      
+    // Should fallback to next proxy or return 'main'
+    const branch = await (SkillsDownloader as any).getDefaultBranch(repo)
+    expect(branch).toBe('main')
   })
 })

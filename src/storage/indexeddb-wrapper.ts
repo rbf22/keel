@@ -3,12 +3,7 @@
  * and provide proper error handling.
  */
 
-export interface VFSFile {
-    path: string;
-    content: string;
-    mimeType: string;
-    updatedAt: number;
-}
+import { VFSFile } from "../types";
 
 /**
  * Interface for storage objects that have an IndexedDB database
@@ -24,13 +19,12 @@ export interface StorageWithDB {
 
 /**
  * Type guard to check if storage has an accessible database
- * Uses a more permissive check to work with private properties
  */
-export function isStorageWithDB(obj: any): obj is { db: IDBDatabase } & Record<string, any> {
-    return obj && 
+export function isStorageWithDB(obj: unknown): obj is { db: IDBDatabase } & Record<string, unknown> {
+    return !!obj && 
            typeof obj === 'object' && 
            'db' in obj && 
-           obj.db instanceof IDBDatabase;
+           (obj as { db: unknown }).db instanceof IDBDatabase;
 }
 
 export class IndexedDBWrapper {

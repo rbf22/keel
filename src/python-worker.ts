@@ -8,27 +8,18 @@ async function init() {
       indexURL: "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/",
     });
 
-    await pyodide.loadPackage(["pandas", "numpy"]);
+    await pyodide.loadPackage(["pandas", "numpy", "matplotlib", "seaborn"]);
 
     // Define helper functions in Python
     await pyodide.runPythonAsync(`
 import json
+import base64
 from js import postMessage
 
-def display_table(df, *args):
+def display_table(df):
     """
     Display a pandas DataFrame as a table in the output.
-    
-    Args:
-        df: pandas DataFrame to display
-        *args: Additional arguments (deprecated, will be ignored)
-        
-    Note: This function accepts only one DataFrame. Additional arguments are ignored
-          and will be removed in a future version.
     """
-    if args:
-        log(f"Warning: display_table received {len(args)} extra arguments. These arguments are deprecated and will be ignored. Only the first DataFrame argument is used.")
-    # Convert dataframe to JSON records
     try:
         if hasattr(df, 'to_json'):
             data = df.to_json(orient="records")
@@ -38,9 +29,25 @@ def display_table(df, *args):
     except Exception as e:
         postMessage(json.dumps({"type": "error", "message": f"Error displaying table: {str(e)}"}))
 
-def display_chart(spec):
-    # spec is a dictionary (Vega-Lite)
-    postMessage(json.dumps({"type": "chart", "spec": spec.to_py() if hasattr(spec, 'to_py') else spec}))
+def display_chart(figure=None):
+    """
+    Display a matplotlib figure or the current figure.
+    """
+    import matplotlib.pyplot as plt
+    import io
+    
+    try:
+        if figure is None:
+            figure = plt.gcf()
+        
+        buf = io.BytesIO()
+        figure.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        img_str = base64.b64encode(buf.read()).decode('utf-8')
+        postMessage(json.dumps({"type": "chart", "data": f"data:image/png;base64,{img_str}"}))
+        plt.close(figure)
+    except Exception as e:
+        postMessage(json.dumps({"type": "error", "message": f"Error displaying chart: {str(e)}"}))
 
 def download_file(filename, content):
     postMessage(json.dumps({"type": "download", "filename": filename, "content": content}))
@@ -75,8 +82,9 @@ builtins.log = log
     `);
 
     self.postMessage(JSON.stringify({ type: "ready" }));
-  } catch (error: any) {
-    self.postMessage(JSON.stringify({ type: "error", message: `Failed to initialize Pyodide: ${error.message}` }));
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    self.postMessage(JSON.stringify({ type: "error", message: `Failed to initialize Pyodide: ${errorMessage}` }));
   }
 }
 
@@ -93,8 +101,9 @@ self.onmessage = async (event) => {
     try {
       await pyodide.runPythonAsync(code);
       self.postMessage(JSON.stringify({ type: "complete" }));
-    } catch (error: any) {
-      self.postMessage(JSON.stringify({ type: "error", message: error.message }));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      self.postMessage(JSON.stringify({ type: "error", message: errorMessage }));
     }
   }
 };

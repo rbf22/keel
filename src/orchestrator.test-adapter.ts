@@ -1,13 +1,16 @@
 import { AgentOrchestrator } from './orchestrator'
 import { LLMEngine } from './llm'
 import { PythonRuntime } from './python-runtime'
+import { AgentResponse } from './types'
+
+import { ResponseType } from './types'
 
 // Define the event structure that the adapter will capture
 export interface OrchestratorEvent {
-  type: 'token' | 'complete' | 'error' | 'tool_call' | 'memory_added'
+  type: ResponseType
   personaId: string
   content: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 /**
@@ -29,12 +32,12 @@ export class OrchestratorTestAdapter {
     this.events = []
     
     // Create a callback that captures all events
-    const captureCallback = (event: any) => {
+    const captureCallback = (event: AgentResponse) => {
       this.events.push({
         type: event.type || 'token',
         personaId: event.personaId || 'system',
         content: event.content || '',
-        metadata: event.metadata
+        metadata: event.data as Record<string, unknown> | undefined
       })
     }
     

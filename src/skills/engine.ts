@@ -1,6 +1,7 @@
-import { PythonRuntime, type PythonOutput } from '../python-runtime'
+import { PythonRuntime } from '../python-runtime'
+import { PythonOutput } from '../types'
 import { skillStorage } from '../storage/skills'
-import { SkillsParser, ParsedSkill, type CodeBlock } from './parser'
+import { SkillsParser, ParsedSkill, CodeBlock } from './parser'
 import { logger } from '../logger'
 
 export interface SkillExecutionContext {
@@ -199,7 +200,26 @@ except Exception as e:
       instructions: `Use this skill when you need to:\n- Analyze CSV or JSON data\n- Generate data summaries\n- Perform statistical analysis\n- Understand data structure`,
       codeBlocks: [{
         language: 'python',
-        code: `# Data analysis skill\nimport pandas as pd\nimport json\nimport io\n\n# Parse data\ndata = {{data}}\n\nif isinstance(data, str):\n    try:\n        df = pd.read_json(data)\n    except:\n        df = pd.read_csv(io.StringIO(data))\nelse:\n    df = pd.DataFrame(data)\n\nprint("Data Shape:", df.shape)\nprint("\\nColumns:", list(df.columns))\nprint("\\nFirst 5 rows:")\nprint(df.head())\nprint("\\nData types:")\nprint(df.dtypes)\nprint("\\nDescriptive statistics:")\nprint(df.describe())`
+        code: `import pandas as pd
+import io
+
+# Data analysis skill
+data = {{data}}
+
+if isinstance(data, str):
+    try:
+        df = pd.read_json(data)
+    except:
+        df = pd.read_csv(io.StringIO(data))
+else:
+    df = pd.DataFrame(data)
+
+log("Data Shape: " + str(df.shape))
+log("\nColumns: " + str(list(df.columns)))
+log("\nFirst 5 rows:")
+display_table(df.head())
+log("\nDescriptive statistics:")
+display_table(df.describe())`
       }]
     })
     
@@ -211,7 +231,29 @@ except Exception as e:
       instructions: `Use this skill when you need to:\n- Create bar charts\n- Create line charts\n- Create pie charts\n- Create scatter plots\n- Visualize data relationships`,
       codeBlocks: [{
         language: 'python',
-        code: `# Chart creation skill\nimport matplotlib.pyplot as plt\nimport json\nimport io\nimport base64\n\n# Parse data\ndata = {{data}}\nchart_type = "{{chart_type}}"\ntitle = data.get('title', 'Chart')\n\nplt.figure(figsize=(10, 6))\n\nif chart_type == "bar":\n    plt.bar(data['labels'], data['values'])\nelif chart_type == "line":\n    plt.plot(data['labels'], data['values'])\nelif chart_type == "pie":\n    plt.pie(data['values'], labels=data['labels'], autopct='%1.1f%%')\nelif chart_type == "scatter":\n    plt.scatter(data['x'], data['y'])\n\nplt.title(title)\nplt.grid(True, alpha=0.3)\n\n# Save chart and return as base64\nbuf = io.BytesIO()\nplt.savefig(buf, format='png', dpi=150, bbox_inches='tight')\nbuf.seek(0)\nimg_base64 = base64.b64encode(buf.read()).decode()\nprint(f"Chart created: data:image/png;base64,{img_base64}")`
+        code: `import matplotlib.pyplot as plt
+import pandas as pd
+
+# Chart creation skill
+data = {{data}}
+chart_type = "{{chart_type}}"
+title = "{{title}}"
+
+df = pd.DataFrame(data)
+plt.figure(figsize=(10, 6))
+
+if chart_type == "bar":
+    plt.bar(df.iloc[:, 0], df.iloc[:, 1])
+elif chart_type == "line":
+    plt.plot(df.iloc[:, 0], df.iloc[:, 1])
+elif chart_type == "pie":
+    plt.pie(df.iloc[:, 1], labels=df.iloc[:, 0], autopct='%1.1f%%')
+elif chart_type == "scatter":
+    plt.scatter(df.iloc[:, 0], df.iloc[:, 1])
+
+plt.title(title)
+plt.grid(True, alpha=0.3)
+display_chart()`
       }]
     })
   }
@@ -234,8 +276,8 @@ except Exception as e:
   }
   
   // Parse LLM response for skill calls
-  parseSkillCalls(response: string): Array<{ name: string; params: Record<string, any> }> {
-    const skillCalls: Array<{ name: string; params: Record<string, any> }> = []
+  parseSkillCalls(response: string): Array<{ name: string; params: Record<string, unknown> }> {
+    const skillCalls: Array<{ name: string; params: Record<string, unknown> }> = []
     
     // Look for <skill name="skillName">params</skill> pattern
     const skillRegex = /<skill\s+name="([^"]+)">([\s\S]*?)<\/skill>/g
@@ -260,7 +302,7 @@ except Exception as e:
   // Execute a skill
   async executeSkill(
     skillName: string, 
-    params: Record<string, any>, 
+    params: Record<string, unknown>, 
     context: SkillExecutionContext
   ): Promise<SkillExecutionResult> {
     if (!this.initialized) {
@@ -324,10 +366,10 @@ except Exception as e:
         
         // Execute the code with proper error handling
         context.pythonRuntime.execute(pythonCode)
-          .catch((err) => {
+          .catch((err: unknown) => {
             if (!hasResolved) {
               hasResolved = true
-              errorResult = err instanceof Error ? err.message : 'Unknown execution error'
+              errorResult = err instanceof Error ? err.message : String(err)
               reject(err)
             }
           })
@@ -362,7 +404,7 @@ except Exception as e:
   }
   
   // Interpolate parameters into code
-  private interpolateParams(code: string, params: Record<string, any>): string {
+  private interpolateParams(code: string, params: Record<string, unknown>): string {
     let result = code
     
     for (const [key, value] of Object.entries(params)) {

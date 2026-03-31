@@ -2,10 +2,10 @@ import * as webllm from "@mlc-ai/web-llm";
 import { logger } from "./logger";
 
 export async function checkWebGPU() {
-  if (!(navigator as any).gpu) {
+  if (!(navigator as unknown as { gpu?: GPU }).gpu) {
     throw new Error("WebGPU is not supported on this browser.");
   }
-  const adapter = await (navigator as any).gpu.requestAdapter();
+  const adapter = await (navigator as unknown as { gpu: GPU }).gpu.requestAdapter();
   if (!adapter) {
     throw new Error("WebGPU adapter not found.");
   }
@@ -14,8 +14,8 @@ export async function checkWebGPU() {
 
 export async function detectBestModel(): Promise<string> {
   try {
-    const memory = (navigator as any).deviceMemory; // in GB
-    const gpu = (navigator as any).gpu;
+    const memory = (navigator as unknown as { deviceMemory?: number }).deviceMemory; // in GB
+    const gpu = (navigator as unknown as { gpu?: GPU }).gpu;
     if (!gpu) return DEFAULT_MODEL_ID;
 
     const adapter = await gpu.requestAdapter();
@@ -86,28 +86,24 @@ const DEFAULT_SYSTEM_PROMPT = `You are Keel, a local-first AI agent for iPad.
 You have access to a Python execution environment for data analysis and visualization.
 When you need to perform calculations, process data, or create charts, write a Python script in a triple-backtick block starting with \`\`\`python.
 
-The environment has 'pandas' and 'numpy' pre-installed.
+The environment has 'pandas', 'numpy', 'matplotlib', and 'seaborn' pre-installed.
 You MUST use the following helper functions for output:
-- display_table(df): To show a pandas DataFrame as a table. It accepts EXACTLY ONE argument.
-- display_chart(spec): To show a Vega-Lite chart. The spec should be a dictionary.
+- display_table(df): To show a pandas DataFrame as a table.
+- display_chart(figure=None): To show a matplotlib figure. If no figure is provided, it shows the current figure.
 - download_file(filename, content): To provide a downloadable file.
 - log(message): To print text to the output panel.
-
-If the user provides an error message from a previous execution, analyze it carefully and provide a corrected version of the code that addresses the root cause.
 
 Example for a chart:
 \`\`\`python
 import pandas as pd
+import matplotlib.pyplot as plt
 df = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
-display_chart({
-    "mark": "line",
-    "encoding": {
-        "x": {"field": "x", "type": "quantitative"},
-        "y": {"field": "y", "type": "quantitative"}
-    },
-    "data": {"values": df.to_dict(orient='records')}
-})
+plt.plot(df['x'], df['y'])
+plt.title("Sample Chart")
+display_chart()
 \`\`\`
+
+If the user provides an error message from a previous execution, analyze it carefully and provide a corrected version of the code that addresses the root cause.
 
 All Python code you write will be executed automatically. Use it whenever it helps answer the user's request.`;
 
@@ -175,8 +171,9 @@ export class LocalLLMEngine implements ILLMEngine {
         fullText += content;
         onToken(fullText);
       }
-    } catch (err: any) {
-      logger.error("llm", `Local generation error: ${err.message}`, { error: err });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error("llm", `Local generation error: ${errorMessage}`, { error: err });
       throw err;
     } finally {
       this.isGenerating = false;
@@ -275,8 +272,9 @@ export class OnlineLLMEngine implements ILLMEngine {
           }
         }
       }
-    } catch (err: any) {
-      logger.error("llm", `Online generation error: ${err.message}`, { error: err });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error("llm", `Online generation error: ${errorMessage}`, { error: err });
       throw err;
     }
 
@@ -322,8 +320,9 @@ export class HybridLLMEngine implements ILLMEngine {
     if (this.useOnline && this.onlineEngine) {
       try {
         return await this.onlineEngine.generate(prompt, options);
-      } catch (err: any) {
-        logger.warn("llm", `Online engine failed, falling back to local: ${err.message}`);
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        logger.warn("llm", `Online engine failed, falling back to local: ${errorMessage}`);
         this.useOnline = false;
         this.onFallback();
         return await this.localEngine.generate(prompt, options);

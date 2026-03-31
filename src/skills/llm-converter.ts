@@ -22,7 +22,7 @@ export class LLMConverter {
     
     for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
       try {
-        logger.info('llm', 'Attempting conversion (attempt {attempt})', {
+        logger.info('llm', `Attempting conversion (attempt ${attempt})`, {
           codeLength: jsCode.length
         })
 
@@ -45,9 +45,10 @@ export class LLMConverter {
         })
 
         return cleanCode
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error('llm', `Conversion failed (attempt ${attempt})`, {
-          error: error.message,
+          error: errorMessage,
           attempt
         })
 

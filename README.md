@@ -4,12 +4,14 @@ Keel is a browser-only agent framework designed to transform an iPad into a self
 
 ## Quick Start Example
 
-This repository contains a working example of a "PadAgent Core" PWA. It runs a local LLM (SmolLM2-135M) entirely in your browser.
+This repository contains a working example of a "PadAgent Core" PWA. It runs a local LLM (SmolLM2-360M) entirely in your browser with agentic orchestration and Python execution.
 
 ### Features in this Example
-- **WebGPU Inference**: Runs models locally on M-series iPads (or any WebGPU-capable browser).
+- **WebGPU Inference**: Runs models locally on M-series iPads (or any WebGPU-capable browser) using WebLLM.
+- **Python Runtime**: Integrated Pyodide-based execution environment for data analysis and calculations.
+- **Data Visualization**: Built-in support for rendering tables (Pandas) and charts (Matplotlib) directly in the chat.
+- **Agentic Orchestration**: Multi-agent framework with Manager, Researcher, Reviewer, and Observer personas.
 - **PWA Support**: Installable on iPadOS via Safari's "Add to Home Screen".
-- **Real-time Stats**: Track tokens/sec and decoding performance.
 - **Offline Capable**: Once initialized, the model is cached in IndexedDB.
 
 ### How to Run Locally
@@ -28,8 +30,8 @@ This repository contains a working example of a "PadAgent Core" PWA. It runs a l
 2. **Access**: Navigate to your hosted GitHub Pages URL in Safari.
 3. **Install**: Tap the **Share** button and select **"Add to Home Screen"**.
 4. **Launch**: Open "Keel" from your Home Screen.
-5. **Initialize**: Tap "Initialize Local LLM". The first run will download ~135MB of model weights.
-6. **Performance Test**: Once ready, send a prompt like "Explain quantum physics in one sentence" and watch the "Stats" section for performance metrics.
+5. **Initialize**: Tap "Initialize Local LLM". The first run will download ~400MB of model weights.
+6. **Performance Test**: Once ready, try a complex request like "Analyze the last 5 logs and create a bar chart of log levels" to see agents and Python in action.
 
 ## Development Base
 This is a base you can build on. You can extend `src/llm.ts` to support larger models or implement the "Agentic Orchestration" mentioned in the original vision.

@@ -1,15 +1,16 @@
 import './style.css'
 import { HybridLLMEngine, LocalLLMEngine, SUPPORTED_MODELS, detectBestModel } from './llm'
-import { PythonRuntime, type PythonOutput } from './python-runtime'
+import { PythonRuntime } from './python-runtime'
+import { PythonOutput, AgentResponse } from './types'
+import { ParsedSkill } from './skills/parser'
 import { logger, type LogEntry } from './logger'
 import { storage } from './storage'
-import { AgentOrchestrator, type AgentResponse } from './orchestrator'
+import { AgentOrchestrator } from './orchestrator'
 import { skillsEngine } from './skills/engine'
 import { SkillsDownloader } from './skills/downloader'
 import { skillStorage } from './storage/skills'
 import { modelStorage } from './storage/models'
 import { IndexedDBWrapper } from './storage/indexeddb-wrapper'
-import embed from 'vega-embed'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -208,7 +209,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
     // Special logic for context refresh
     if (tab === 'context') {
-        refreshVFSDisplay();
+        void refreshVFSDisplay();
     }
 
     // Hide notification dot if logs tab is clicked
@@ -260,6 +261,15 @@ logger.subscribe((entry: LogEntry) => {
   }
 
   debugLogsEl.appendChild(logDiv);
+  
+  // Limit DOM elements to prevent performance degradation (keep last 200)
+  if (debugLogsEl.children.length > 200) {
+    const toRemove = debugLogsEl.children.length - 200;
+    for (let i = 0; i < toRemove; i++) {
+      debugLogsEl.removeChild(debugLogsEl.children[0]);
+    }
+  }
+  
   debugLogsEl.scrollTop = debugLogsEl.scrollHeight;
 
   // Show notification dot on error
@@ -326,15 +336,16 @@ async function refreshVFSDisplay() {
         });
         
         logger.info('vfs', `Successfully displayed ${results.filter(r => r.file).length}/${files.length} files`);
-    } catch (err: any) {
+    } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
         logger.error('vfs', 'Failed to refresh VFS display', { error: err });
-        vfsContainer.textContent = `Error: ${err.message}`;
+        vfsContainer.textContent = `Error: ${errorMessage}`;
     }
 }
 
 refreshContextBtn.onclick = refreshVFSDisplay;
 
-copyLogsBtn.onclick = () => {
+copyLogsBtn.onclick = async () => {
   const logs = logger.getLogs();
   const logText = logs.map(entry => {
     const timestamp = new Date(entry.timestamp).toISOString();
@@ -347,16 +358,18 @@ copyLogsBtn.onclick = () => {
     return text;
   }).join('\n\n');
 
-  navigator.clipboard.writeText(logText).then(() => {
+  try {
+    await navigator.clipboard.writeText(logText);
     const originalText = copyLogsBtn.textContent;
     copyLogsBtn.textContent = 'Copied!';
     setTimeout(() => {
       copyLogsBtn.textContent = originalText;
     }, 2000);
-  }).catch(err => {
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
     console.error('Failed to copy logs: ', err);
-    alert('Failed to copy logs to clipboard');
-  });
+    alert(`Failed to copy logs to clipboard: ${errorMessage}`);
+  }
 };
 
 async function initSettings() {
@@ -424,17 +437,12 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
     logDiv.className = 'output-log';
     logDiv.textContent = output.message || '';
     targetEl.appendChild(logDiv);
-  } else if (output.type === 'error') {
-    const errDiv = document.createElement('div');
-    errDiv.className = 'output-error';
-    errDiv.textContent = output.message || '';
-    targetEl.appendChild(errDiv);
-  } else if (output.type === 'table' && output.data) {
+  } else if (output.type === 'table' && Array.isArray(output.data)) {
     const container = document.createElement('div');
     container.className = 'data-table-container';
     const table = document.createElement('table');
 
-    if (output.data && Array.isArray(output.data) && output.data.length > 0) {
+    if (output.data.length > 0) {
       const keys = Object.keys(output.data[0] as Record<string, unknown>);
       const thead = document.createElement('thead');
       const headerRow = document.createElement('tr');
@@ -447,11 +455,11 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
       table.appendChild(thead);
 
       const tbody = document.createElement('tbody');
-      output.data.forEach((row: unknown) => {
+      output.data.forEach((row: any) => {
         const tr = document.createElement('tr');
         keys.forEach(key => {
           const td = document.createElement('td');
-          td.textContent = (row as Record<string, unknown>)[key] as string || '';
+          td.textContent = String((row as Record<string, unknown>)[key] ?? '');
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -460,18 +468,32 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
     }
     container.appendChild(table);
     targetEl.appendChild(container);
-  } else if (output.type === 'chart' && output.spec) {
-    const chartDiv = document.createElement('div');
-    chartDiv.className = 'chart-container';
-    targetEl.appendChild(chartDiv);
-    embed(chartDiv, output.spec, { actions: false });
+  } else if (output.type === 'chart' && typeof output.data === 'string') {
+    const img = document.createElement('img');
+    img.src = output.data;
+    img.className = 'chart-image';
+    img.style.maxWidth = '100%';
+    img.style.borderRadius = '4px';
+    targetEl.appendChild(img);
+  } else if (output.type === 'error') {
+    const errDiv = document.createElement('div');
+    errDiv.className = 'output-error';
+    errDiv.textContent = output.message || '';
+    targetEl.appendChild(errDiv);
   } else if (output.type === 'download' && output.filename && output.content) {
     const link = document.createElement('a');
     link.className = 'download-link';
     const blob = new Blob([output.content], { type: 'text/plain' });
-    link.href = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    link.href = url;
     link.download = output.filename;
     link.textContent = `Download ${output.filename}`;
+    
+    // Revoke URL after download is triggered
+    link.addEventListener('click', () => {
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    
     targetEl.appendChild(link);
   }
 
@@ -528,8 +550,8 @@ initBtn.onclick = async () => {
     logger.info('system', 'Skills engine initialized');
     
     // Load skills display
-    refreshSkillsDisplay();
-    updateStorageUsage();
+    void refreshSkillsDisplay();
+    void updateStorageUsage();
 
     logger.info('system', 'Initialization successful');
     statusEl.textContent = "Keel Ready"
@@ -537,9 +559,10 @@ initBtn.onclick = async () => {
     sendBtn.disabled = false
     setupControls.style.display = 'none'
     agentControls.style.display = 'flex'
-  } catch (err: any) {
-    logger.error('system', `Initialization failed: ${err.message}`, { error: err });
-    statusEl.textContent = `Error: ${err.message}`
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error('system', `Initialization failed: ${errorMessage}`, { error: err });
+    statusEl.textContent = `Error: ${errorMessage}`
     initBtn.disabled = false
     modelSelect.disabled = false
   }
@@ -589,11 +612,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
         }
         const contentDiv = agentDivs[update.personaId].querySelector('.agent-content')!;
 
-        if (update.type === 'table' && update.data) {
-          handlePythonOutput({ type: 'table', data: update.data as unknown[] }, contentDiv as HTMLElement);
-        } else if (update.type === 'chart' && update.data) {
-          handlePythonOutput({ type: 'chart', spec: update.data }, contentDiv as HTMLElement);
-        } else if (update.type === 'error') {
+        if (update.type === 'error') {
           const errDiv = document.createElement('div');
           errDiv.className = 'output-error';
           errDiv.textContent = update.content;
@@ -612,8 +631,9 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
 
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
-    } catch (err: any) {
-      addMessage(`Orchestrator Error: ${err.message}`, 'assistant');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      addMessage(`Orchestrator Error: ${errorMessage}`, 'assistant');
     } finally {
       userInput.disabled = false;
       sendBtn.disabled = false;
@@ -679,10 +699,11 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
               errorDiv.textContent = `Skill ${skillCall.name} error: ${result.error}`;
               artifactContainer.appendChild(errorDiv);
             }
-          } catch (error: any) {
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
             const errorDiv = document.createElement('div');
             errorDiv.className = 'output-error';
-            errorDiv.textContent = `Skill execution error: ${error.message}`;
+            errorDiv.textContent = `Skill execution error: ${errorMessage}`;
             artifactContainer.appendChild(errorDiv);
           }
         }
@@ -718,7 +739,8 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
           try {
             await python.execute(code);
             pythonStatusEl.textContent = 'Ready';
-          } catch (err: any) {
+          } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
             pythonStatusEl.textContent = 'Error';
             // Errors are already handled via handlePythonOutput (inline)
 
@@ -727,7 +749,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
             const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
             const recoveryPrompt = `The previous Python code failed with the following error:
 \`\`\`
-${err.message}
+${errorMessage}
 \`\`\`
 
 Recent system logs:
@@ -746,9 +768,10 @@ Please analyze the error and provide a corrected version of the code.`;
             queueMicrotask(async () => {
               try {
                 await handleSend(recoveryPrompt, retryCount + 1);
-              } catch (recoveryError: any) {
+              } catch (recoveryError: unknown) {
+                const recoveryErrorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
                 logger.error('main', 'Error recovery failed', { error: recoveryError });
-                addMessage(`Recovery failed: ${recoveryError.message}`, 'assistant');
+                addMessage(`Recovery failed: ${recoveryErrorMessage}`, 'assistant');
                 // Ensure controls are re-enabled on recovery failure
                 userInput.disabled = false;
                 sendBtn.disabled = false;
@@ -769,8 +792,9 @@ Please analyze the error and provide a corrected version of the code.`;
 
     const stats = await engine.getStats()
     if (stats) statsEl.textContent = stats
-  } catch (err: any) {
-    assistantDiv.textContent = `Error: ${err.message}`
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    assistantDiv.textContent = `Error: ${errorMessage}`
   } finally {
     if (retryCount === 0) {
       // Re-enable input only if it's the top-level call and we are not recovering
@@ -844,7 +868,7 @@ async function refreshSkillsDisplay() {
   })
 }
 
-function showSkillDetails(skill: any) {
+function showSkillDetails(skill: ParsedSkill) {
   skillName.textContent = skill.name
   skillDescription.textContent = skill.description
   
@@ -923,8 +947,9 @@ installSkillBtn.onclick = async () => {
     
     refreshSkillsDisplay()
     alert(`Successfully installed ${skills.length} skill(s)`)
-  } catch (error: any) {
-    alert(`Failed to install skills: ${error.message}`)
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    alert(`Failed to install skills: ${errorMessage}`)
   } finally {
     installSkillBtn.disabled = false
     installSkillBtn.textContent = 'Install Skill'

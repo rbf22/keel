@@ -1,29 +1,13 @@
 import { LLMEngine } from "./llm";
 import { PERSONAS } from "./personas";
-import { storage, MemoryCategory } from "./storage";
+import { storage } from "./storage";
 import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
-import { PythonRuntime, PythonOutput } from "./python-runtime";
+import { PythonRuntime } from "./python-runtime";
 import { getSystemContext } from "./tools";
 import { skillsEngine } from "./skills/engine";
 import { SecureWebFetcher } from "./utils/secure-web-fetcher";
-
-export interface AgentResponse {
-  personaId: string;
-  content: string;
-  type?: 'text' | 'table' | 'chart' | 'error' | 'plan' | 'observation';
-  data?: unknown;
-}
-
-interface ToolCall {
-  name: string;
-  args: Record<string, unknown>;
-}
-
-interface PendingPythonExecution extends ToolCall {
-  name: 'execute_python';
-  args: { code: string };
-}
+import { AgentResponse, ToolCall, PendingPythonExecution, MemoryCategory, PythonOutput } from "./types";
 
 export class AgentOrchestrator {
   private engine: LLMEngine;
@@ -32,6 +16,9 @@ export class AgentOrchestrator {
   private maxLoops = 15;
   private pendingToolCall: PendingPythonExecution | null = null;
   private isExecutingPendingTool: boolean = false; // Track if we're currently executing a pending tool
+  
+  // Hashing and loop detection config
+  private readonly stateHashContextLimit = 3; // Number of history messages to include in state hash
   
   // Enhanced loop detection state
   private agentSequence: string[] = [];
@@ -48,8 +35,8 @@ export class AgentOrchestrator {
    * Generate a hash of current state to detect repeating patterns
    */
   private async hashState(agentId: string, instruction: string): Promise<string> {
-    // Get last 3 messages from history for context
-    const recentContent = this.chatHistory.slice(-3).map(m => m.content).join('');
+    // Get last N messages from history for context
+    const recentContent = this.chatHistory.slice(-this.stateHashContextLimit).map(m => m.content).join('');
     const stateString = `${agentId}|${instruction}|${recentContent}`;
     
     // Use Web Crypto API for stronger hashing if available
@@ -305,7 +292,6 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
       const observer = PERSONAS["observer"];
       const observerPrompt = await getSystemContext(observer);
       const observerTask = `Analyze the last action by ${persona.name} and the tool result: ${toolResult}.
-Also consider any recent Python execution outputs: ${toolResult.includes("Table") || toolResult.includes("Chart") ? "Outputs contain rich data." : ""}
 Provide a concise observation for the Manager.`;
 
       let observation = "";
@@ -432,13 +418,13 @@ Provide a concise observation for the Manager.`;
                           onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
                       } else if (out.type === 'table') {
                           const columns = (out.data as Array<Record<string, unknown>>)?.[0] ? Object.keys((out.data as Array<Record<string, unknown>>)[0]).join(", ") : "none";
-                          const tableSummary = `[Data Table Output: ${out.data?.length || 0} rows, Columns: ${columns}]`;
+                          const tableSummary = `[Data Table Output: ${Array.isArray(out.data) ? out.data.length : 0} rows, Columns: ${columns}]`;
                           pyOutput += tableSummary + "\n";
                           onUpdate({ personaId: "python", content: tableSummary, type: 'table', data: out.data });
                       } else if (out.type === 'chart') {
-                          const chartSummary = `[Vega-Lite Chart Output: ${JSON.stringify(out.spec).substring(0, 200)}...]`;
+                          const chartSummary = `[Chart Output]`;
                           pyOutput += chartSummary + "\n";
-                          onUpdate({ personaId: "python", content: chartSummary, type: 'chart', data: out.spec });
+                          onUpdate({ personaId: "python", content: chartSummary, type: 'chart', data: out.data });
                       }
                   };
                   

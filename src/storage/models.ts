@@ -86,8 +86,9 @@ export class ModelStorage {
   }
 
   async getStorageUsage(): Promise<{ used: number; available: number }> {
-    if ('storage' in navigator && 'estimate' in navigator.storage) {
-      const estimate = await navigator.storage.estimate()
+    const nav = navigator as unknown as { storage?: { estimate?: () => Promise<StorageEstimate> } }
+    if (nav.storage?.estimate) {
+      const estimate = await nav.storage.estimate()
       return {
         used: estimate.usage || 0,
         available: estimate.quota || 0

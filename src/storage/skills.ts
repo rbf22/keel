@@ -51,8 +51,8 @@ export class SkillStorage {
     }
     
     // Check storage quota
-    const nav = (globalThis as any).navigator
-    if (nav && nav.storage && nav.storage.estimate) {
+    const nav = navigator as unknown as { storage?: { estimate?: () => Promise<StorageEstimate> } }
+    if (nav.storage?.estimate) {
       try {
         const estimate = await nav.storage.estimate()
         const usage = estimate.usage || 0

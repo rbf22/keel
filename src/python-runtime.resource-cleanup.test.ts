@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { PythonRuntime, type PythonOutput } from './python-runtime';
+import { PythonRuntime } from './python-runtime';
+import { PythonOutput } from './types';
 
 // Mock indexedDB
 Object.defineProperty(globalThis, 'indexedDB', {
@@ -13,7 +14,7 @@ class MockWorker {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((error: ErrorEvent) => void) | null = null;
   
-  private messages: any[] = [];
+  private messages: unknown[] = [];
   private terminated = false;
   public executionCount = 0;
   
@@ -28,7 +29,7 @@ class MockWorker {
     });
   }
   
-  postMessage(data: any) {
+  postMessage(data: unknown) {
     if (this.terminated) {
       throw new Error('Worker has been terminated');
     }
@@ -60,9 +61,9 @@ class MockWorker {
   
   addEventListener(type: string, listener: EventListener) {
     if (type === 'message') {
-      this.onmessage = listener as any;
+      this.onmessage = listener as unknown as (event: MessageEvent) => void;
     } else if (type === 'error') {
-      this.onerror = listener as any;
+      this.onerror = listener as unknown as (error: ErrorEvent) => void;
     }
   }
   
@@ -134,7 +135,7 @@ describe('PythonRuntime - Resource Cleanup', () => {
   it('should properly clean up timeout on successful execution', async () => {
     await runtime.init();
     
-    const clearTimeoutSpy = vi.spyOn(globalThis as any, 'clearTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis as unknown as { clearTimeout: (id?: any) => void }, 'clearTimeout');
     
     await runtime.execute('print("test")');
     
@@ -148,7 +149,7 @@ describe('PythonRuntime - Resource Cleanup', () => {
     await runtime.init();
     
     const worker = (runtime as any).worker as MockWorker;
-    const clearTimeoutSpy = vi.spyOn(globalThis as any, 'clearTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis as unknown as { clearTimeout: (id?: any) => void }, 'clearTimeout');
     
     // Simulate error during execution
     const executePromise = runtime.execute('invalid code');
@@ -186,7 +187,7 @@ describe('PythonRuntime - Resource Cleanup', () => {
     await runtime.init();
     
     const worker = (runtime as any).worker as MockWorker;
-    const clearTimeoutSpy = vi.spyOn(globalThis as any, 'clearTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis as unknown as { clearTimeout: (id?: any) => void }, 'clearTimeout');
     const terminateSpy = vi.spyOn(worker, 'terminate');
     
     // Set very short timeout
@@ -237,7 +238,7 @@ describe('PythonRuntime - Resource Cleanup', () => {
   it('should handle multiple concurrent executions with proper cleanup', async () => {
     await runtime.init();
     
-    const clearTimeoutSpy = vi.spyOn(globalThis as any, 'clearTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis as unknown as { clearTimeout: (id?: any) => void }, 'clearTimeout');
     
     // Execute code sequentially (the worker doesn't truly support concurrency)
     await runtime.execute('print("test 1")');
@@ -271,7 +272,7 @@ describe('PythonRuntime - Resource Cleanup', () => {
   });
 
   it('should handle output handler cleanup properly', async () => {
-    const outputs: PythonOutput[] = [];
+    const outputs: any[] = [];
     const testRuntime = new PythonRuntime((output) => outputs.push(output));
     
     await testRuntime.init();

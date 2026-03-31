@@ -1,25 +1,5 @@
 import { logger } from "./logger";
-
-export interface VFSFile {
-  path: string; // e.g. "keel://resources/report.txt"
-  content: string; // L2: Full details
-  l0?: string; // Abstract (~100 tokens)
-  l1?: string; // Overview (~2000 tokens)
-  mimeType: string;
-  metadata: Record<string, any>;
-  updatedAt: number;
-}
-
-export type MemoryCategory = "profile" | "preferences" | "entities" | "events" | "cases" | "patterns";
-
-export interface AgentMemory {
-  id?: number;
-  category: MemoryCategory;
-  content: string;
-  tags: string[];
-  timestamp: number;
-  metadata: Record<string, any>;
-}
+import { VFSFile, MemoryCategory, AgentMemory } from "./types";
 
 export class KeelStorage {
   private dbName = "keel-storage";
@@ -173,7 +153,7 @@ export class KeelStorage {
   }
 
   // Skill Methods
-  async saveSkill(id: string, definition: any) {
+  async saveSkill(id: string, definition: Record<string, unknown>) {
     if (!this.db) throw new Error("Storage not initialized");
     return new Promise<void>((resolve, reject) => {
       const transaction = this.db!.transaction(["skills"], "readwrite");
@@ -184,7 +164,7 @@ export class KeelStorage {
     });
   }
 
-  async getAllSkills(): Promise<any[]> {
+  async getAllSkills(): Promise<Record<string, unknown>[]> {
     if (!this.db) throw new Error("Storage not initialized");
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction(["skills"], "readonly");

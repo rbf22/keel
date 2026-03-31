@@ -13,10 +13,7 @@
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.82",
-    "pyodide": "^0.27.0",
-    "vega": "^6.2.0",
-    "vega-embed": "^7.1.0",
-    "vega-lite": "^6.4.2"
+    "pyodide": "^0.27.0"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.9",

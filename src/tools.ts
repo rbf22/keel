@@ -6,7 +6,7 @@ export interface Tool {
   description: string;
   parameters: {
     type: "object";
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required: string[];
   };
 }

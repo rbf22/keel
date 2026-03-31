@@ -6,7 +6,7 @@ export interface ParsedSkill {
   content: string
   codeBlocks: CodeBlock[]
   tags?: string[]
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 import { type StoredSkill as StorageStoredSkill } from '../storage/skills'
@@ -42,14 +42,14 @@ export class SkillsParser {
     }
 
     const yamlContent = frontmatterMatch[1]
-    const frontmatter = this.parseSimpleYAML(yamlContent)
+    const frontmatter = this.parseSimpleYAML(yamlContent) as Record<string, unknown>
     
     // Extract metadata from frontmatter (handle nested metadata)
-    const { name, description, tags, metadata: nestedMetadata, license, ...otherFields } = frontmatter
-    const metadata = {
-      ...nestedMetadata,
+    const { name: _name, description: _description, tags: _tags, metadata: nestedMetadata, license, ...otherFields } = frontmatter
+    const metadata: Record<string, unknown> = {
+      ...(typeof nestedMetadata === 'object' && nestedMetadata !== null ? (nestedMetadata as Record<string, unknown>) : {}),
       ...otherFields,
-      ...(license && { license })
+      ...(license ? { license } : {})
     }
     
     // Validate required fields
@@ -63,12 +63,12 @@ export class SkillsParser {
 
     // Parse the skill
     const parsed: ParsedSkill = {
-      name: frontmatter.name,
-      description: frontmatter.description,
+      name: String(frontmatter.name || ''),
+      description: String(frontmatter.description || ''),
       instructions: this.stripCodeBlocks(content.replace(/^---\n[\s\S]*?\n---\n/, '')).trim(),
       content,
       codeBlocks: this.extractCodeBlocks(content),
-      tags: frontmatter.tags,
+      tags: Array.isArray(frontmatter.tags) ? frontmatter.tags : undefined,
       metadata
     }
     
@@ -80,43 +80,70 @@ export class SkillsParser {
     return parsed
   }
   
-  static parseSimpleYAML(yaml: string): Record<string, any> {
-    const result: Record<string, any> = {}
+  static parseSimpleYAML(yaml: string): Record<string, unknown> {
+    const result: Record<string, unknown> = {}
     const lines = yaml.split('\n')
     let currentKey: string | null = null
     let inMultilineString = false
-    let multilineDelimiter: string | null = null
+    let multilineIndent = 0
     let multilineContent: string[] = []
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
       const trimmed = line.trim()
       
-      // Skip empty lines and comments
-      if (!trimmed || trimmed.startsWith('#')) {
+      // Skip empty lines and comments (if not in multiline)
+      if (!inMultilineString && (!trimmed || trimmed.startsWith('#'))) {
         continue
       }
       
-      // Handle multiline strings
+      // Handle multiline strings (block scalars)
       if (inMultilineString) {
-        if (trimmed === multilineDelimiter) {
-          // End of multiline string
-          result[currentKey!] = multilineContent.join('\n')
+        const currentIndent = line.search(/\S/)
+        if (currentIndent !== -1 && currentIndent < multilineIndent) {
+          // End of multiline string based on indentation
+          result[currentKey!] = multilineContent.join('\n').trimEnd()
           inMultilineString = false
           multilineContent = []
           currentKey = null
-          multilineDelimiter = null
+          // Reprocess this line as it might be a new key
+          i-- 
+          continue
         } else {
-          multilineContent.push(line)
+          // Add line content, stripping only the block indent
+          multilineContent.push(line.substring(multilineIndent))
         }
         continue
       }
       
-      // Check for multiline string start
-      if (currentKey && (trimmed === '|' || trimmed === '>' || trimmed.startsWith('|"') || trimmed.startsWith(">'"))) {
-        inMultilineString = true
-        multilineDelimiter = '|'
-        continue
+      // Check for block scalar start (| or >)
+      const blockStartMatch = line.match(/^(\w+):\s*([|>])\s*$/)
+      if (blockStartMatch) {
+        const key = blockStartMatch[1]
+        
+        // Check if there's actually a next line with more indentation
+        let nextIndentedLineIdx = -1
+        let j = i + 1
+        while (j < lines.length) {
+          if (lines[j].trim()) {
+            const nextIndent = lines[j].search(/\S/)
+            // We assume a block scalar MUST be indented more than the key
+            // The key's indent is line.search(/\S/)
+            if (nextIndent > line.search(/\S/)) {
+              nextIndentedLineIdx = j
+            }
+            break
+          }
+          j++
+        }
+
+        if (nextIndentedLineIdx !== -1) {
+          inMultilineString = true
+          currentKey = key
+          multilineIndent = lines[nextIndentedLineIdx].search(/\S/)
+          continue
+        }
+        // If no indented content follows, treat it as a normal value (handled below)
       }
       
       const match = line.match(/^(\w+):\s*(.*)$/)
@@ -198,6 +225,7 @@ export class SkillsParser {
             result[currentKey] = {}
           }
           
+          const nestedResult = result[currentKey] as Record<string, unknown>
           if ((nestedValue.startsWith('"') && nestedValue.endsWith('"')) || 
               (nestedValue.startsWith("'") && nestedValue.endsWith("'"))) {
             const unquoted = nestedValue.slice(1, -1)
@@ -207,15 +235,15 @@ export class SkillsParser {
               .replace(/\\n/g, '\n')
               .replace(/\\t/g, '\t')
               .replace(/\\\\/g, '\\')
-            result[currentKey][nestedKey] = unescaped
+            nestedResult[nestedKey] = unescaped
           } else if (nestedValue === 'true' || nestedValue === 'false') {
-            result[currentKey][nestedKey] = nestedValue === 'true'
+            nestedResult[nestedKey] = nestedValue === 'true'
           } else if (nestedValue === 'null' || nestedValue === '~') {
-            result[currentKey][nestedKey] = null
+            nestedResult[nestedKey] = null
           } else if (!isNaN(Number(nestedValue)) && nestedValue !== '') {
-            result[currentKey][nestedKey] = Number(nestedValue)
+            nestedResult[nestedKey] = Number(nestedValue)
           } else {
-            result[currentKey][nestedKey] = nestedValue
+            nestedResult[nestedKey] = nestedValue
           }
         }
       } else if (currentKey && trimmed.startsWith('- ')) {
@@ -223,13 +251,14 @@ export class SkillsParser {
         if (!Array.isArray(result[currentKey])) {
           result[currentKey] = []
         }
+        const currentArray = result[currentKey] as unknown[]
         const item = trimmed.slice(2).trim()
         // Remove quotes if present
         if ((item.startsWith('"') && item.endsWith('"')) || 
             (item.startsWith("'") && item.endsWith("'"))) {
-          result[currentKey].push(item.slice(1, -1))
+          currentArray.push(item.slice(1, -1))
         } else {
-          result[currentKey].push(item)
+          currentArray.push(item)
         }
       }
     }
@@ -438,8 +467,9 @@ export class JS_to_Python_Converter {
     if (this.llmConverter && this.llmConverter.isAvailable()) {
       try {
         return await this.llmConverter.convertWithLLM(jsCode)
-      } catch (error: any) {
-        console.warn('LLM conversion failed, falling back to simple converter:', error.message)
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn('LLM conversion failed, falling back to simple converter:', errorMessage)
       }
     }
 

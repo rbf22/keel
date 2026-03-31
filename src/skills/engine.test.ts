@@ -56,9 +56,6 @@ describe('SkillsEngine', () => {
     expect(skillsEngine.getAvailableSkills()).toContainEqual(
       expect.objectContaining({ name: 'analyze_data' })
     )
-    expect(skillsEngine.getAvailableSkills()).toContainEqual(
-      expect.objectContaining({ name: 'create_chart' })
-    )
   })
 
   it('should parse skill calls from LLM response', () => {

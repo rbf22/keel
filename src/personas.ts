@@ -18,7 +18,7 @@ export const SKILLS: Record<string, Skill> = {
   "data_analysis": {
     id: "data_analysis",
     name: "Data Analysis",
-    instructions: "Use pandas and numpy to analyze data. Use display_table(df) or display_chart(spec) for output. Always log(message) important steps.",
+    instructions: "Use pandas and numpy to analyze data. Always log(message) important steps.",
     pythonTools: ["pandas", "numpy", "matplotlib", "seaborn"]
   },
   "research": {
@@ -102,7 +102,7 @@ Read/Write files with CALL: vfs_read/vfs_write if needed.`,
 For Python code:
 - Check for syntax errors.
 - Check if it solves the specific user request.
-- Check if it uses the correct helper functions (log, display_table, etc.).
+   - Check if it uses the correct helper functions (log, download_file, etc.).
 
 If correct, respond ONLY with "APPROVED".
 If incorrect, list the errors clearly.`,

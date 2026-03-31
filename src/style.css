@@ -281,36 +281,6 @@ button:disabled {
   border-radius: 4px;
 }
 
-.data-table-container {
-  overflow-x: auto;
-  border: 1px solid #333;
-  border-radius: 4px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.75rem;
-}
-
-th, td {
-  padding: 0.4rem;
-  border: 1px solid #333;
-  text-align: left;
-}
-
-th {
-  background: #222;
-}
-
-.chart-container {
-  width: 100%;
-  min-height: 200px;
-  background: white;
-  border-radius: 4px;
-  padding: 0.5rem;
-}
-
 .download-link {
   display: inline-block;
   color: #0a84ff;
@@ -399,14 +369,6 @@ th {
   align-self: flex-start;
 }
 
-.artifact-container .data-table-container {
-  background: #111;
-}
-
-.artifact-container .chart-container {
-  background: white;
-}
-
 .artifact-container .output-log {
   font-size: 0.8rem;
   background: #111;
@@ -415,8 +377,39 @@ th {
   border-left: 3px solid #007aff;
 }
 
-.artifact-container .output-error {
-  font-size: 0.8rem;
+.data-table-container {
+  overflow-x: auto;
+  border: 1px solid #333;
+  border-radius: 4px;
+  margin-top: 0.5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  background: #111;
+}
+
+th, td {
+  padding: 0.4rem;
+  border: 1px solid #333;
+  text-align: left;
+}
+
+th {
+  background: #222;
+  color: #fff;
+}
+
+.chart-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 0.5rem;
+  background: white;
+  padding: 0.5rem;
+  border-radius: 4px;
 }
 
 @media (prefers-color-scheme: light) {
@@ -450,9 +443,6 @@ th {
   }
   .output-log {
     color: #333;
-  }
-  th {
-    background: #eee;
   }
   .settings-container h3,
   .settings-group label,
