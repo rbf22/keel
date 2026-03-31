@@ -2,18 +2,36 @@
 
 This document summarizes all the critical bugs and issues that have been fixed in the Keel codebase as part of the comprehensive bug fixing initiative.
 
-## Critical Bug Fixes (Phase 1)
+## Latest Code Review Fixes (Applied)
 
-### 1. Agent Cycle Detection Logic Fixed
-**File**: `src/orchestrator.ts`
-**Issue**: The `detectAgentCycle()` method used `lastIndexOf` with a joined string against an array of individual IDs, causing it to always return -1 and never detect cycles.
-**Fix**: Rewrote the method to properly compare arrays of agent IDs directly, ensuring accurate cycle detection.
-**Test**: `src/orchestrator.cycle-detection.test.ts`
+### 15. Type Safety Improvements
+- **Fixed**: Variable `result` in secure-web-fetcher.ts was typed as `any`, updated to proper union type
+- **Fixed**: `extractContent` method signature updated to accept string or object types  
+- **Fixed**: Added type checking for `allorigins` format to handle unexpected string inputs
+- **Updated**: All error types changed from `any` to `unknown` with proper type guards across changed files
 
-### 2. Handler Race Condition in Skills Engine
-**File**: `src/skills/engine.ts`
-**Issue**: Output handler might not be restored if `execute()` fails immediately.
-**Fix**: The existing code already used a `finally` block which ensures handler restoration. Verified and documented the implementation.
+### 16. Redundant Conditions Removed
+- **Fixed**: Removed redundant checks for `href`, `src`, and `action` attributes with `javascript:` in sanitization logic
+- **Reason**: These were already covered by the general `attrValue.includes('javascript:')` check
+
+### 17. Test Logic Errors Fixed
+- **Fixed**: `beforeEach` cleanup in logger.memory-limits.test.ts was incorrectly iterating over logs
+- **Fixed**: Test was setting `maxLogs(3)` which violates the enforced minimum of 100
+- **Updated**: Test now uses 105 logs with maxLogs of 100 to properly test trimming behavior
+
+### 18. DOMParser Null Handling Enhanced
+- **Enhanced**: Added explicit null checks for `doc.body` and `doc.documentElement`
+- **Improved**: More readable fallback logic with clear comments
+
+## Critical Bug Fixes Applied - Code Review Recommendations
+
+## Issues Fixed
+
+### 1. Type Safety Issues in `secure-web-fetcher.ts`
+- **Fixed**: Variable `result` on line 248 was typed as `any`, updated to proper union type
+- **Fixed**: `extractContent` method signature updated to accept string or object types
+- **Fixed**: Added type checking for `allorigins` format to handle unexpected string inputs
+- **Fixed**: Updated all error handling from `any` to `unknown` with proper type guards
 **Test**: Covered in existing skills engine tests
 
 ### 3. Type Safety for Pending Tool Call
@@ -148,4 +166,4 @@ All fixes maintain backward compatibility:
 
 ## Summary
 
-All 14 identified issues have been fixed with comprehensive test coverage. The codebase is now more robust, secure, and maintainable. Critical bugs affecting correctness have been resolved, resource management issues are addressed, and edge cases are properly handled.
+All 18 identified issues have been fixed with comprehensive test coverage. The codebase is now more robust, secure, and maintainable. Critical bugs affecting correctness have been resolved, resource management issues are addressed, and edge cases are properly handled. The latest code review fixes further improved type safety, removed redundant code, and fixed test logic errors.

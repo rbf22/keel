@@ -262,8 +262,9 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
             } else {
               toolResult += `Skill ${skillCall.name} failed: ${result.error}\n`;
             }
-          } catch (error: any) {
-            toolResult += `Error executing skill ${skillCall.name}: ${error.message}\n`;
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            toolResult += `Error executing skill ${skillCall.name}: ${errorMessage}\n`;
           }
         }
         this.chatHistory.push({ role: "assistant", content: `[System Observation] Skill execution result: ${toolResult}` });
@@ -332,9 +333,10 @@ Provide a concise observation for the Manager.`;
                   this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
                   // After execution, return to manager
                   nextAgentId = "manager";
-              } catch (e: any) {
-                  logger.error("orchestrator", "Failed to execute pending tool call after approval", { error: e });
-                  toolResult = `Error executing approved code: ${e.message}`;
+              } catch (e: unknown) {
+                  const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+                  logger.error('orchestrator', 'Failed to execute pending tool call after approval', { error: errorMessage });
+                  toolResult = `Error executing approved code: ${errorMessage}`;
                   this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
               } finally {
                   this.isExecutingPendingTool = false; // Clear execution flag
@@ -415,12 +417,10 @@ Provide a concise observation for the Manager.`;
                       });
                       
                       return content;
-                  } catch (error: any) {
-                      logger.error("orchestrator", "Secure web fetch failed", {
-                          url: args.url,
-                          error: error.message
-                      });
-                      return `Failed to fetch content: ${error.message}`;
+                  } catch (error: unknown) {
+                      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                      logger.error('orchestrator', 'Secure web fetch failed', { error: errorMessage });
+                      return `Failed to fetch content: ${errorMessage}`;
                   }
               case "execute_python":
                   let pyOutput = "";
@@ -453,9 +453,10 @@ Provide a concise observation for the Manager.`;
               default:
                   return `Unknown tool: ${name}`;
           }
-      } catch (err: any) {
-          logger.error("orchestrator", `Tool execution failed: ${name}`, { error: err });
-          return `Error: ${err.message}`;
+      } catch (err: unknown) {
+          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+          logger.error('orchestrator', 'Tool execution failed', { error: errorMessage });
+          return `Error: ${errorMessage}`;
       }
   }
 }

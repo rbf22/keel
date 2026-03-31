@@ -70,7 +70,7 @@ export class SecureWebFetcher {
       }
       
       return parsedUrl;
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof Error) {
         throw error;
       }
@@ -151,10 +151,7 @@ export class SecureWebFetcher {
               if (attrName.startsWith('on') || 
                   attrValue.includes('javascript:') || 
                   attrValue.includes('vbscript:') ||
-                  attrValue.includes('data:text/html') ||
-                  attrName === 'href' && attrValue.startsWith('javascript:') ||
-                  attrName === 'src' && attrValue.startsWith('javascript:') ||
-                  attrName === 'action' && attrValue.startsWith('javascript:')) {
+                  attrValue.includes('data:text/html')) {
                 el.removeAttribute(attr.name);
               }
             }
@@ -165,7 +162,12 @@ export class SecureWebFetcher {
         doc.querySelectorAll('style, script').forEach(el => el.remove());
         
         // Get sanitized HTML
-        sanitized = doc.body.innerHTML || doc.documentElement.textContent || sanitized;
+        if (doc.body) {
+          sanitized = doc.body.innerHTML;
+        } else if (doc.documentElement && doc.documentElement.textContent) {
+          sanitized = doc.documentElement.textContent;
+        }
+        // If both are null, keep the regex-sanitized content
       } catch (error) {
         // If DOMParser fails, fall back to regex-sanitized content
         console.warn('DOMParser sanitization failed, using regex fallback:', error);
@@ -178,10 +180,13 @@ export class SecureWebFetcher {
   /**
    * Extract content from proxy response based on format
    */
-  private static extractContent(result: { content?: string; text?: string; body?: string; contents?: string; data?: string }, format: string): string | null {
+  private static extractContent(result: { content?: string; text?: string; body?: string; contents?: string; data?: string } | string, format: string): string | null {
     switch (format) {
       case 'allorigins':
-        return result?.contents || null;
+        if (typeof result === 'string') {
+          return null; // Unexpected format for allorigins
+        }
+        return result.contents || null;
       case 'direct':
         // For direct responses, the result might be the content itself
         // or it might have a 'data' field
@@ -206,8 +211,9 @@ export class SecureWebFetcher {
     let validatedUrl: URL;
     try {
       validatedUrl = this.validateUrl(url, opts.allowedProtocols);
-    } catch (error: any) {
-      logger.error('secure-fetch', 'URL validation failed', { url, error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error('secure-fetch', 'URL validation failed', { url, error: errorMessage });
       throw error;
     }
     
@@ -245,7 +251,7 @@ export class SecureWebFetcher {
         }
         
         // Parse response
-        let result: any;
+        let result: { content?: string; text?: string; body?: string; contents?: string; data?: string } | string;
         const contentType = response.headers.get('content-type') || '';
         
         try {
@@ -254,7 +260,7 @@ export class SecureWebFetcher {
           } else {
             result = await response.text();
           }
-        } catch (parseError) {
+        } catch (parseError: unknown) {
           proxyErrors.push(`${proxy.name}: Parse error`);
           logger.warn('secure-fetch', `Failed to parse response from ${proxy.name}`);
           continue;
@@ -290,15 +296,16 @@ export class SecureWebFetcher {
         
         return content;
         
-      } catch (err: any) {
-        if (err.name === 'AbortError') {
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
           proxyErrors.push(`${proxy.name}: Timeout`);
           logger.warn('secure-fetch', `Proxy ${proxy.name} timed out`);
         } else {
-          proxyErrors.push(`${proxy.name}: ${err.message}`);
+          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+          proxyErrors.push(`${proxy.name}: ${errorMessage}`);
           logger.warn('secure-fetch', `Proxy ${proxy.name} failed`, {
-            error: err.message,
-            name: err.name
+            error: errorMessage,
+            name: err instanceof Error ? err.name : 'Unknown'
           });
         }
         continue;

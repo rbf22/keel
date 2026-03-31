@@ -5,7 +5,7 @@ export interface LogEntry {
   level: LogLevel;
   category: 'llm' | 'python' | 'system' | 'orchestrator' | 'storage' | 'vfs' | 'main' | 'secure-fetch' | 'skills';
   message: string;
-  data?: any;
+  data?: unknown;
 }
 
 type LogListener = (entry: LogEntry) => void;
@@ -35,19 +35,19 @@ class Logger {
     this.listeners.forEach(l => l(fullEntry));
   }
 
-  info(category: LogEntry['category'], message: string, data?: any) {
+  info(category: LogEntry['category'], message: string, data?: unknown) {
     this.log({ level: 'info', category, message, data });
   }
 
-  warn(category: LogEntry['category'], message: string, data?: any) {
+  warn(category: LogEntry['category'], message: string, data?: unknown) {
     this.log({ level: 'warn', category, message, data });
   }
 
-  error(category: LogEntry['category'], message: string, data?: any) {
+  error(category: LogEntry['category'], message: string, data?: unknown) {
     this.log({ level: 'error', category, message, data });
   }
 
-  debug(category: LogEntry['category'], message: string, data?: any) {
+  debug(category: LogEntry['category'], message: string, data?: unknown) {
     this.log({ level: 'debug', category, message, data });
   }
 

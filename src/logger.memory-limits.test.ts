@@ -4,11 +4,8 @@ import { logger } from './logger';
 describe('Logger - Memory Limits', () => {
   beforeEach(() => {
     // Clear logs before each test
-    logger.getLogs().forEach(() => {
-      // Access private logs array through type assertion
-      const loggerAny = logger as any;
-      loggerAny.logs = [];
-    });
+    const loggerAny = logger as any;
+    loggerAny.logs = [];
   });
 
   it('should maintain default max logs limit', () => {
@@ -124,11 +121,11 @@ describe('Logger - Memory Limits', () => {
 
   it('should preserve log order when trimming', async () => {
     const loggerAny = logger as any;
-    loggerAny.setMaxLogs(3);
+    loggerAny.setMaxLogs(100); // Use minimum allowed value
     
     // Add logs with timestamps
     const timestamps: number[] = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 105; i++) {
       logger.info('system', `message ${i}`);
       timestamps.push(Date.now());
       // Small delay to ensure different timestamps
