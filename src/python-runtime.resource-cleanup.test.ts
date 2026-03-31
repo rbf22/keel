@@ -209,7 +209,7 @@ describe('PythonRuntime - Resource Cleanup', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
     
     // The execution should have timed out
-    expect(executePromise).resolves.toMatchObject({ message: 'Execution timed out' });
+    await expect(executePromise).resolves.toMatchObject({ message: 'Execution timed out' });
     
     // Should only call terminate once
     expect(terminateSpy).toHaveBeenCalledTimes(1);

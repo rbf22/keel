@@ -108,7 +108,7 @@ export class AgentOrchestrator {
     this.stateHashes = [];
   }
 
-  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "observer"]) {
+  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "observer"], signal?: AbortSignal) {
     logger.info("orchestrator", "Starting complex task with tools", { userRequest, activePersonaIds });
     
     // Reset loop detection state for fresh task
@@ -126,6 +126,10 @@ export class AgentOrchestrator {
     let nextAgentInstruction = userRequest;
 
     while (!taskComplete && loopCount < this.maxLoops) {
+      if (signal?.aborted) {
+        logger.info("orchestrator", "Task aborted by signal");
+        throw new Error("Task aborted");
+      }
       loopCount++;
       logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
       
@@ -216,7 +220,8 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
           onUpdate({ personaId: nextAgentId, content: text });
         },
         history: this.chatHistory,
-        systemOverride: enhancedPersonaPrompt
+        systemOverride: enhancedPersonaPrompt,
+        signal
       });
 
       this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
@@ -301,7 +306,8 @@ Provide a concise observation for the Manager.`;
           onUpdate({ personaId: "observer", content: text, type: "observation" });
         },
         history: this.chatHistory,
-        systemOverride: observerPrompt
+        systemOverride: observerPrompt,
+        signal
       });
       this.chatHistory.push({ role: "assistant", content: `[Observer] ${observation}` });
 

@@ -225,6 +225,8 @@ let engine: HybridLLMEngine | null = null
 let python: PythonRuntime | null = null
 let chatHistory: { role: 'user' | 'assistant' | 'system'; content: string }[] = []
 let isTaskRunning = false;
+let currentAbortController: AbortController | null = null;
+let currentTaskId = 0;
 
 function setTaskRunning(running: boolean) {
   isTaskRunning = running;
@@ -234,10 +236,17 @@ function setTaskRunning(running: boolean) {
   
   if (isTaskRunning) {
     logger.info('system', 'Task execution started');
+  } else {
+    currentAbortController = null;
   }
 }
 
 stopBtn.onclick = () => {
+  if (currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = null;
+  }
+  
   if (python) {
     python.terminate();
     // Re-initialize python since it was terminated
@@ -245,7 +254,7 @@ stopBtn.onclick = () => {
     void python.init();
   }
   setTaskRunning(false);
-  addMessage("Task stopped by user.", "system" as any);
+  addMessage("Task stopped by user.", "system");
 };
 
 // Subscribe to logs
@@ -433,7 +442,7 @@ saveSettingsBtn.onclick = () => {
   }, 2000);
 };
 
-function addMessage(text: string, role: 'user' | 'assistant') {
+function addMessage(text: string, role: 'user' | 'assistant' | 'system') {
   const div = document.createElement('div')
   div.className = `message ${role}-message`
   div.textContent = text
@@ -569,6 +578,10 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
     return;
   }
 
+  const taskId = ++currentTaskId;
+  currentAbortController = new AbortController();
+  const signal = currentAbortController.signal;
+
   userInput.disabled = true;
   sendBtn.disabled = true;
 
@@ -588,6 +601,8 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
 
     try {
       await orchestrator.runTask(text, (update: AgentResponse) => {
+        if (taskId !== currentTaskId || signal.aborted) return;
+        
         if (!agentDivs[update.personaId]) {
           const div = document.createElement('div');
           div.className = `message assistant-message agent-${update.personaId}`;
@@ -621,12 +636,19 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
         }
 
         messagesEl.scrollTop = messagesEl.scrollHeight;
-      });
+      }, undefined, signal);
     } catch (err: unknown) {
+      if (taskId !== currentTaskId) return;
+      if (signal.aborted) {
+        logger.info('main', 'Task execution aborted');
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       addMessage(`Orchestrator Error: ${errorMessage}`, 'assistant');
     } finally {
-      setTaskRunning(false);
+      if (taskId === currentTaskId) {
+        setTaskRunning(false);
+      }
     }
     return;
   }
@@ -645,22 +667,28 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
     
     await engine.generate(text, {
       onToken: (updatedText) => {
+        if (taskId !== currentTaskId || signal.aborted) return;
         fullText = updatedText;
         assistantDiv.textContent = fullText
         messagesEl.scrollTop = messagesEl.scrollHeight
       },
       history: chatHistory.slice(0, -1),
-      systemOverride: systemPrompt
+      systemOverride: systemPrompt,
+      signal
     });
+
+    if (taskId !== currentTaskId || signal.aborted) return;
 
     chatHistory.push({ role: 'assistant', content: fullText });
     
     // Parse and execute skill calls
     const skillCalls = skillsEngine.parseSkillCalls(fullText);
     if (skillCalls.length > 0 && python) {
+      if (taskId !== currentTaskId || signal.aborted) return;
       clearPythonOutput();
       
       const dualPythonHandler = (output: PythonOutput) => {
+        if (taskId !== currentTaskId || signal.aborted) return;
         handlePythonOutput(output, artifactContainer); // Chat
         handlePythonOutput(output, pythonOutputEl);    // Python Tab
       };
@@ -670,6 +698,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
       
       try {
         for (const skillCall of skillCalls) {
+          if (taskId !== currentTaskId || signal.aborted) break;
           try {
             pythonStatusEl.textContent = 'Running skill...';
             const result = await skillsEngine.executeSkill(
@@ -678,6 +707,8 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
               { pythonRuntime: python }
             );
             
+            if (taskId !== currentTaskId || signal.aborted) break;
+
             if (result.success) {
               const resultDiv = document.createElement('div');
               resultDiv.className = 'output-log';
@@ -690,6 +721,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
               artifactContainer.appendChild(errorDiv);
             }
           } catch (error: unknown) {
+            if (taskId !== currentTaskId || signal.aborted) break;
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorDiv = document.createElement('div');
             errorDiv.className = 'output-error';
@@ -704,6 +736,8 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
       }
     }
 
+    if (taskId !== currentTaskId || signal.aborted) return;
+
     // Extract python code blocks
     const pythonRegex = /```python\n([\s\S]*?)```/g;
     let match;
@@ -713,9 +747,11 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
     }
 
     if (codeBlocks.length > 0) {
+      if (taskId !== currentTaskId || signal.aborted) return;
       clearPythonOutput();
       
       const dualPythonHandler = (output: PythonOutput) => {
+        if (taskId !== currentTaskId || signal.aborted) return;
         handlePythonOutput(output, artifactContainer); // Chat
         handlePythonOutput(output, pythonOutputEl);    // Python Tab
       };
@@ -725,11 +761,14 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
 
       try {
         for (const code of codeBlocks) {
+          if (taskId !== currentTaskId || signal.aborted) break;
           pythonStatusEl.textContent = 'Running...';
           try {
             await python.execute(code);
+            if (taskId !== currentTaskId || signal.aborted) break;
             pythonStatusEl.textContent = 'Ready';
           } catch (err: unknown) {
+            if (taskId !== currentTaskId || signal.aborted) break;
             const errorMessage = err instanceof Error ? err.message : String(err);
             pythonStatusEl.textContent = 'Error';
             // Errors are already handled via handlePythonOutput (inline)
@@ -757,8 +796,10 @@ Please analyze the error and provide a corrected version of the code.`;
             // Use queueMicrotask for safer async scheduling with error boundaries
             queueMicrotask(async () => {
               try {
+                if (taskId !== currentTaskId || signal.aborted) return;
                 await handleSend(recoveryPrompt, retryCount + 1);
               } catch (recoveryError: unknown) {
+                if (taskId !== currentTaskId || signal.aborted) return;
                 const recoveryErrorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
                 logger.error('main', 'Error recovery failed', { error: recoveryError });
                 addMessage(`Recovery failed: ${recoveryErrorMessage}`, 'assistant');
@@ -781,12 +822,17 @@ Please analyze the error and provide a corrected version of the code.`;
     }
 
     const stats = await engine.getStats()
-    if (stats) statsEl.textContent = stats
+    if (taskId === currentTaskId && stats) statsEl.textContent = stats
   } catch (err: unknown) {
+    if (taskId !== currentTaskId) return;
+    if (signal.aborted) {
+      logger.info('main', 'Task execution aborted');
+      return;
+    }
     const errorMessage = err instanceof Error ? err.message : String(err);
     assistantDiv.textContent = `Error: ${errorMessage}`
   } finally {
-    if (retryCount === 0) {
+    if (taskId === currentTaskId && retryCount === 0) {
       setTaskRunning(false);
       userInput.focus();
     }

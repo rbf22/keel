@@ -74,6 +74,7 @@ export interface GenerateOptions {
   onToken: (text: string) => void;
   history?: webllm.ChatCompletionMessageParam[];
   systemOverride?: string;
+  signal?: AbortSignal;
 }
 
 export interface ILLMEngine {
@@ -138,8 +139,12 @@ export class LocalLLMEngine implements ILLMEngine {
     // Small delay to ensure WebLLM worker/tokenizer state is settled
     await new Promise(resolve => setTimeout(resolve, 250));
 
-    const { onToken, history = [], systemOverride } = options;
+    const { onToken, history = [], systemOverride, signal } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
+
+    if (signal?.aborted) {
+      throw new Error("Generation aborted");
+    }
 
     const messages: webllm.ChatCompletionMessageParam[] = [
       { role: "system", content: systemPrompt },
@@ -158,6 +163,10 @@ export class LocalLLMEngine implements ILLMEngine {
     let fullText = "";
     try {
       for await (const chunk of chunks) {
+        if (signal?.aborted) {
+          logger.info("llm", "Local generation aborted by signal");
+          throw new Error("Generation aborted");
+        }
         const content = chunk.choices[0]?.delta?.content || "";
         fullText += content;
         onToken(fullText);
@@ -201,8 +210,12 @@ export class OnlineLLMEngine implements ILLMEngine {
   }
 
   async generate(prompt: string, options: GenerateOptions) {
-    const { onToken, history = [], systemOverride } = options;
+    const { onToken, history = [], systemOverride, signal } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
+
+    if (signal?.aborted) {
+      throw new Error("Generation aborted");
+    }
 
     const messages = [
       { role: "system", content: systemPrompt },
@@ -224,6 +237,7 @@ export class OnlineLLMEngine implements ILLMEngine {
         messages,
         stream: true,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -240,6 +254,11 @@ export class OnlineLLMEngine implements ILLMEngine {
 
     try {
       while (true) {
+        if (signal?.aborted) {
+          logger.info("llm", "Online generation aborted by signal");
+          reader.cancel();
+          throw new Error("Generation aborted");
+        }
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -312,6 +331,7 @@ export class HybridLLMEngine implements ILLMEngine {
       try {
         return await this.onlineEngine.generate(prompt, options);
       } catch (err: unknown) {
+        if (options.signal?.aborted) throw err;
         const errorMessage = err instanceof Error ? err.message : String(err);
         logger.warn("llm", `Online engine failed, falling back to local: ${errorMessage}`);
         this.useOnline = false;
