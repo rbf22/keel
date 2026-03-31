@@ -401,7 +401,7 @@ copyLogsBtn.onclick = async () => {
     }, 2000);
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error('Failed to copy logs: ', err);
+    logger.error('main', 'Failed to copy logs', { error: err });
     alert(`Failed to copy logs to clipboard: ${errorMessage}`);
   }
 };
@@ -1005,7 +1005,10 @@ installSkillBtn.onclick = async () => {
     installSkillBtn.textContent = 'Installing...'
     
     const skills = await SkillsDownloader.downloadSkills(repo, (progress) => {
-      console.log(`Skill ${progress.skillName}: ${progress.status} - ${progress.progress}%`)
+      logger.info('skills', `Download progress for ${progress.skillName}`, { 
+        status: progress.status, 
+        progress: progress.progress 
+      });
     }, selectedNames)
     
     // Save skills to storage

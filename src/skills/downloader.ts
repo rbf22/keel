@@ -1,6 +1,7 @@
 import { type StoredSkill } from '../storage/skills'
 import { SkillsParser, CodeBlock, JS_to_Python_Converter } from './parser.js'
 import { LLMEngine } from '../llm'
+import { logger } from '../logger'
 
 export interface GitHubRepo {
   owner: string
@@ -17,6 +18,8 @@ export interface SkillDownloadProgress {
 
 export class SkillsDownloader {
   private static readonly GITHUB_API_BASE = 'https://api.github.com'
+  private static readonly MAX_RESOURCE_SIZE = 1024 * 1024 // 1MB limit per resource
+  private static readonly MAX_TOTAL_RESOURCES_SIZE = 5 * 1024 * 1024 // 5MB total limit per skill
   private static readonly CORS_PROXIES = [
     { url: 'https://api.allorigins.win/get?url=', name: 'allorigins', format: 'allorigins' },
     { url: 'https://corsproxy.io/?', name: 'corsproxy', format: 'direct' },
@@ -143,27 +146,52 @@ export class SkillsDownloader {
             progress: 0
           })
           
-          // Get skill files
-          const skillFiles = await this.fetchRepoContents(repo, branch, `skills/${skillDir.name}`)
-          const skillFile = skillFiles.find(file => file.name === 'SKILL.md')
+          // Get ALL skill files recursively (Level 3 support)
+          const resources: Record<string, string> = {}
+          const allFiles = await this.fetchAllFilesRecursive(repo, branch, `skills/${skillDir.name}`)
           
+          const skillFile = allFiles.find(file => file.path === 'SKILL.md')
           if (!skillFile) {
-            console.warn(`No SKILL.md found in ${skillDir.name}`)
+            logger.warn('skills', `No SKILL.md found in ${skillDir.name}`)
             continue
           }
           
-          // Download skill content
-          onProgress?.({
-            skillName: skillDir.name,
-            status: 'downloading',
-            progress: 25
-          })
-          
           if (!skillFile.download_url) {
-            throw new Error('No download URL available for skill file')
+            logger.warn('skills', `SKILL.md in ${skillDir.name} has no download URL`)
+            continue
           }
           
-          const content = await this.fetchFileContent(skillFile.download_url)
+          // Download all resource contents
+          let totalSize = 0
+          for (const file of allFiles) {
+            if (file.download_url) {
+              const content = await this.fetchFileContent(file.download_url)
+              
+              // Check resource size limit
+              const resourceSize = content.length
+              if (resourceSize > this.MAX_RESOURCE_SIZE) {
+                logger.warn('skills', `Resource ${file.path} in ${skillDir.name} exceeds size limit`, {
+                  size: resourceSize,
+                  limit: this.MAX_RESOURCE_SIZE
+                })
+                continue
+              }
+
+              if (totalSize + resourceSize > this.MAX_TOTAL_RESOURCES_SIZE) {
+                logger.warn('skills', `Total resources size for ${skillDir.name} exceeds limit`, {
+                  currentTotal: totalSize,
+                  newResourceSize: resourceSize,
+                  limit: this.MAX_TOTAL_RESOURCES_SIZE
+                })
+                break
+              }
+
+              resources[file.path] = content
+              totalSize += resourceSize
+            }
+          }
+          
+          const mainContent = resources['SKILL.md']
           
           // Parse skill
           onProgress?.({
@@ -172,7 +200,8 @@ export class SkillsDownloader {
             progress: 50
           })
           
-          const parsed = SkillsParser.parse(content)
+          const parsed = SkillsParser.parse(mainContent)
+          parsed.resources = resources // Include all files as resources
           
           // Convert JavaScript to Python if needed
           onProgress?.({
@@ -223,7 +252,7 @@ export class SkillsDownloader {
           })
           
         } catch (error) {
-          console.error(`Failed to download skill ${skillDir.name}:`, error)
+          logger.error('skills', `Failed to download skill ${skillDir.name}`, { error })
           onProgress?.({
             skillName: skillDir.name,
             status: 'error',
@@ -236,9 +265,36 @@ export class SkillsDownloader {
       return skills
       
     } catch (error) {
-      console.error('Failed to download skills:', error)
+      logger.error('skills', 'Failed to download skills', { error })
       throw error
     }
+  }
+
+  // Fetch all files in a directory recursively
+  private static async fetchAllFilesRecursive(
+    repo: GitHubRepo,
+    branch: string,
+    path: string,
+    rootPath: string = path
+  ): Promise<Array<{ path: string, download_url?: string }>> {
+    const contents = await this.fetchRepoContents(repo, branch, path)
+    const files: Array<{ path: string, download_url?: string }> = []
+    
+    for (const item of contents) {
+      const relativePath = item.path.replace(rootPath + '/', '') || item.name
+      
+      if (item.type === 'file') {
+        files.push({
+          path: relativePath,
+          download_url: item.download_url
+        })
+      } else if (item.type === 'dir') {
+        const subFiles = await this.fetchAllFilesRecursive(repo, branch, item.path, rootPath)
+        files.push(...subFiles)
+      }
+    }
+    
+    return files
   }
   
   // Get default branch for repository with CORS handling
@@ -389,7 +445,7 @@ export class SkillsDownloader {
         .filter(item => item.type === 'dir')
         .map(item => ({ name: item.name }))
     } catch (error) {
-      console.error('Failed to list skills:', error)
+      logger.error('skills', 'Failed to list skills', { error })
       return []
     }
   }
@@ -446,6 +502,7 @@ export class SkillsDownloader {
 
 interface GitHubContent {
   name: string
+  path: string
   type: 'file' | 'dir'
   download_url?: string
 }

@@ -4,6 +4,7 @@
  */
 
 import { VFSFile } from "../types";
+import { logger } from "../logger";
 
 /**
  * Interface for storage objects that have an IndexedDB database
@@ -66,7 +67,7 @@ export class IndexedDBWrapper {
                 return { path, file };
             } catch (error) {
                 // Log error but don't fail the entire operation
-                console.error(`Failed to get file ${path}:`, error);
+                logger.error('storage', `Failed to get file ${path}`, { error });
                 return { path, file: null };
             }
         });

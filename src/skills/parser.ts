@@ -16,6 +16,7 @@ export interface ParsedSkill extends SkillMetadata {
 
 import { type StoredSkill as StorageStoredSkill } from '../storage/skills'
 import { LLMConverter } from './llm-converter'
+import { logger } from '../logger'
 
 export interface CodeBlock {
   language: string
@@ -166,7 +167,7 @@ export class SkillsParser {
       
       // Validate key
       if (!key.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/)) {
-        console.warn(`Invalid YAML key: ${key}`)
+        logger.warn('skills', `Invalid YAML key: ${key}`)
         continue
       }
       
@@ -203,7 +204,7 @@ export class SkillsParser {
         try {
           result[key] = JSON.parse(value)
         } catch {
-          console.warn(`Failed to parse inline object for key ${key}: ${value}`)
+          logger.warn('skills', `Failed to parse inline object for key ${key}: ${value}`)
           result[key] = {}
         }
       } else if (value === '') {
@@ -323,21 +324,21 @@ export class SkillsParser {
   static validateSkill(skill: ParsedSkill): boolean {
     // Check required fields
     if (!skill.name || typeof skill.name !== 'string') {
-      console.error('Skill validation failed: invalid name')
+      logger.error('skills', 'Skill validation failed: invalid name')
       return false
     }
     
     if (!skill.description || typeof skill.description !== 'string') {
-      console.error('Skill validation failed: invalid description')
+      logger.error('skills', 'Skill validation failed: invalid description')
       return false
     }
     
     if (!skill.instructions || typeof skill.instructions !== 'string') {
       // Allow empty instructions if skill has code blocks
       if (skill.codeBlocks && skill.codeBlocks.length > 0) {
-        console.warn('Skill has no instructions but has code blocks')
+        logger.warn('skills', 'Skill has no instructions but has code blocks')
       } else {
-        console.error('Skill validation failed: invalid instructions')
+        logger.error('skills', 'Skill validation failed: invalid instructions')
         return false
       }
     }
@@ -346,7 +347,7 @@ export class SkillsParser {
     if (!skill.name || skill.name.length > 64 || !skill.name.match(/^[a-z0-0-]+$/)) {
       // Relaxing lowercase slightly for backward compatibility but warning
       if (skill.name.match(/^[a-zA-Z0-9_-]+$/)) {
-        console.warn(`Skill name "${skill.name}" contains uppercase or underscores which is discouraged in the official format.`)
+        logger.warn('skills', `Skill name "${skill.name}" contains uppercase or underscores which is discouraged in the official format.`)
       } else {
         throw new Error(`Invalid skill name: "${skill.name}". Names must be max 64 characters and contain only letters, numbers, and hyphens.`)
       }
@@ -372,25 +373,25 @@ export class SkillsParser {
     
     // Validate code blocks
     if (!Array.isArray(skill.codeBlocks)) {
-      console.error('Skill validation failed: codeBlocks must be an array')
+      logger.error('skills', 'Skill validation failed: codeBlocks must be an array')
       return false
     }
     
     for (const block of skill.codeBlocks) {
       if (!block.language || typeof block.language !== 'string') {
-        console.error('Skill validation failed: code block missing language')
+        logger.error('skills', 'Skill validation failed: code block missing language')
         return false
       }
         
       if (!block.code || typeof block.code !== 'string') {
-        console.error('Skill validation failed: code block missing code')
+        logger.error('skills', 'Skill validation failed: code block missing code')
         return false
       }
     }
     
     // Validate tags if present
     if (skill.tags && !Array.isArray(skill.tags)) {
-      console.error('Skill validation failed: tags must be an array')
+      logger.error('skills', 'Skill validation failed: tags must be an array')
       return false
     }
     
@@ -508,7 +509,7 @@ export class JS_to_Python_Converter {
         return await this.llmConverter.convertWithLLM(jsCode)
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn('LLM conversion failed, falling back to simple converter:', errorMessage)
+        logger.warn('skills', `LLM conversion failed, falling back to simple converter: ${errorMessage}`)
       }
     }
 

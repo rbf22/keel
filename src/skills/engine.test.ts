@@ -39,22 +39,23 @@ describe('SkillsEngine', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset engine state
-    skillsEngine['skills'].clear()
+    skillsEngine['skillMetadata'].clear()
+    skillsEngine['loadedSkills'].clear()
     skillsEngine['initialized'] = false
   })
 
-  it('should initialize and register built-in skills', async () => {
+  it('should initialize and register built-in skills metadata', async () => {
     const mockSkills: StoredSkill[] = []
     vi.mocked(storageModule.skillStorage.getAllSkills).mockResolvedValue(mockSkills)
     
     await skillsEngine.init()
     skillsEngine.registerBuiltInSkills()
     
-    expect(skillsEngine.getAvailableSkills()).toContainEqual(
+    expect(skillsEngine.getAvailableSkillsMetadata()).toContainEqual(
       expect.objectContaining({ name: 'calculator' })
     )
-    expect(skillsEngine.getAvailableSkills()).toContainEqual(
-      expect.objectContaining({ name: 'analyze_data' })
+    expect(skillsEngine.getAvailableSkillsMetadata()).toContainEqual(
+      expect.objectContaining({ name: 'analyze-data' })
     )
   })
 
@@ -76,13 +77,13 @@ The result is 4.`
 
   it('should parse multiple skill calls', () => {
     const response = `<skill name="calculator">{"expression": "2 + 2"}</skill>
-<skill name="analyze_data">{"data": "[1,2,3]"}</skill>`
+<skill name="analyze-data">{"data": "[1,2,3]"}</skill>`
     
     const skillCalls = skillsEngine.parseSkillCalls(response)
     
     expect(skillCalls).toHaveLength(2)
     expect(skillCalls[0].name).toBe('calculator')
-    expect(skillCalls[1].name).toBe('analyze_data')
+    expect(skillCalls[1].name).toBe('analyze-data')
   })
 
   it('should handle skill calls with text parameters', () => {
@@ -145,7 +146,7 @@ The result is 4.`
     expect(interpolated).toBe('data = [1,2,3]')
   })
 
-  it('should load skills from storage on initialization', async () => {
+  it('should load skills metadata from storage on initialization', async () => {
     const mockStoredSkill: StoredSkill = {
       name: 'test-skill',
       description: 'Test skill',
@@ -163,7 +164,7 @@ Test content`,
     
     await skillsEngine.init()
     
-    const availableSkills = skillsEngine.getAvailableSkills()
+    const availableSkills = skillsEngine.getAvailableSkillsMetadata()
     expect(availableSkills).toContainEqual(
       expect.objectContaining({
         name: 'test-skill',

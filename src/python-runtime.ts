@@ -10,6 +10,8 @@ export class PythonRuntime {
   private currentTimeout: number | undefined = undefined;
   private executionQueue: Array<{
     code: string;
+    resources?: Record<string, string>;
+    executionId?: string;
     resolve: () => void;
     reject: (error: Error) => void;
   }> = [];
@@ -103,15 +105,18 @@ export class PythonRuntime {
     });
   }
 
-  async execute(code: string) {
+  async execute(code: string, resources?: Record<string, string>) {
     if (!this.worker || !this.isReady) {
       logger.error('python', 'Python runtime not ready');
       throw new Error('Python runtime not ready');
     }
 
+    // Use a unique ID for each execution to handle timeouts safely
+    const executionId = Math.random().toString(36).substring(7);
+
     // Add to queue and wait for turn
     return new Promise<void>((resolve, reject) => {
-      this.executionQueue.push({ code, resolve, reject });
+      this.executionQueue.push({ code, resources, resolve, reject, executionId });
       void this.processQueue();
     });
   }
@@ -129,7 +134,7 @@ export class PythonRuntime {
       if (!this.worker || !this.isReady) {
         throw new Error('Python runtime terminated or not ready');
       }
-      await this.internalExecute(task.code);
+      await this.internalExecute(task.code, task.resources, task.executionId);
       task.resolve();
     } catch (error) {
       task.reject(error instanceof Error ? error : new Error(String(error)));
@@ -139,12 +144,12 @@ export class PythonRuntime {
     }
   }
 
-  private async internalExecute(code: string) {
+  private async internalExecute(code: string, resources?: Record<string, string>, executionId?: string) {
     if (!this.worker) {
       throw new Error('Python worker lost during execution');
     }
 
-    logger.info('python', 'Executing code', { code });
+    logger.info('python', 'Executing code', { code, hasResources: !!resources, executionId });
     const startTime = performance.now();
 
     return new Promise<void>((resolve, reject) => {
@@ -166,10 +171,10 @@ export class PythonRuntime {
           
           if (output.type === 'complete') {
             const duration = performance.now() - startTime;
-            logger.info('python', 'Execution complete', { durationMs: duration });
+            logger.info('python', 'Execution complete', { durationMs: duration, executionId });
             resolve();
           } else {
-            logger.error('python', `Execution error: ${output.message}`);
+            logger.error('python', `Execution error: ${output.message}`, { executionId });
             reject(new Error(output.message));
           }
         }
@@ -177,7 +182,7 @@ export class PythonRuntime {
 
       this.worker!.addEventListener('message', handleMessage);
 
-      this.worker!.postMessage(JSON.stringify({ type: 'execute', code }));
+      this.worker!.postMessage(JSON.stringify({ type: 'execute', code, resources, executionId }));
 
       this.currentTimeout = timeout = setTimeout(() => {
         // Check if this timeout is still the current one (prevents race conditions)
@@ -192,7 +197,7 @@ export class PythonRuntime {
           // Send error output
           this.onOutput({ type: 'error', message: 'Execution timed out. Worker terminated.' });
           // Reject the promise
-          reject(new Error('Execution timed out'));
+          reject(new Error('Execution timeout'));
         }
       }, this.executionTimeout);
     });

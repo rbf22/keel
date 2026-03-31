@@ -51,26 +51,47 @@ export interface ModelInfo {
 }
 
 // Custom model configuration to handle potential fetch failures from default CDNs
-const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
+export const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
   {
     model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
-    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC",
-    model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/SmolLM2-360M-Instruct-q4f16_1-MLC.wasm",
+    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/",
+    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+    vram_required_MB: 376.06,
+    low_resource_required: true,
+    required_features: ["shader-f16"],
+    overrides: {
+      context_window_size: 4096,
+    },
   },
   {
     model_id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-    model: "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC",
-    model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/Llama-3.2-1B-Instruct-q4f16_1-MLC.wasm",
+    model: "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/",
+    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+    vram_required_MB: 879.04,
+    low_resource_required: true,
+    overrides: {
+      context_window_size: 4096,
+    },
   },
   {
     model_id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
-    model: "https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC",
-    model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/Llama-3.2-3B-Instruct-q4f16_1-MLC.wasm",
+    model: "https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC/resolve/main/",
+    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+    vram_required_MB: 2263.69,
+    low_resource_required: true,
+    overrides: {
+      context_window_size: 4096,
+    },
   },
 ];
 
-const CUSTOM_APP_CONFIG: webllm.AppConfig = {
-  model_list: CUSTOM_MODEL_LIST,
+export const CUSTOM_APP_CONFIG: webllm.AppConfig = {
+  ...webllm.prebuiltAppConfig,
+  model_list: [
+    ...webllm.prebuiltAppConfig.model_list.filter(m => !CUSTOM_MODEL_LIST.some(cm => cm.model_id === m.model_id)),
+    ...CUSTOM_MODEL_LIST
+  ],
+  useIndexedDBCache: true,
 };
 
 // Map web-llm prebuilt models to our ModelInfo format
@@ -129,18 +150,53 @@ export class LocalLLMEngine implements ILLMEngine {
       await checkWebGPU();
 
       this.onUpdate("Initializing Engine...");
-      this.engine = await webllm.CreateMLCEngine(this.modelId, {
-        appConfig: CUSTOM_APP_CONFIG,
-        initProgressCallback: (report: webllm.InitProgressReport) => {
-          this.onUpdate(`Loading: ${report.text}`);
-        },
-      });
+      const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
+      if (config) {
+        logger.info("llm", `Initializing engine for ${this.modelId}`, {
+          model: config.model,
+          model_lib: config.model_lib
+        });
+        
+        // Use the MLCEngine constructor + reload pattern for better control/logging
+        const engine = new webllm.MLCEngine({
+          appConfig: CUSTOM_APP_CONFIG,
+          initProgressCallback: (report: webllm.InitProgressReport) => {
+            this.onUpdate(`Loading: ${report.text}`);
+            logger.info("llm", `Init progress: ${report.text}`, { progress: report.progress });
+          },
+        });
+
+        this.onUpdate(`Reloading model: ${this.modelId}...`);
+        await engine.reload(this.modelId);
+        this.engine = engine;
+      } else {
+        // Fallback for models not in our custom list (should not happen with SUPPORTED_MODELS sync)
+        logger.warn("llm", `Model ${this.modelId} not found in CUSTOM_MODEL_LIST, falling back to default prebuilt config`);
+        this.engine = await webllm.CreateMLCEngine(this.modelId, {
+          initProgressCallback: (report: webllm.InitProgressReport) => {
+            this.onUpdate(`Loading: ${report.text}`);
+          },
+        });
+      }
+      
+      logger.info("llm", `Local engine initialized successfully: ${this.modelId}`);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error("llm", `Failed to initialize local engine (${this.modelId}): ${errorMessage}`, { error: err });
+      const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
+      
+      let diagnosticInfo = `Failed to initialize local engine (${this.modelId}): ${errorMessage}`;
+      if (config) {
+        diagnosticInfo += `\nAttempted Weights: ${config.model}\nAttempted WASM: ${config.model_lib}`;
+      }
+      
+      logger.error("llm", diagnosticInfo, { error: err });
       
       if (errorMessage.includes("Failed to fetch")) {
-        throw new Error(`Failed to download model files for ${this.modelId}. Please check your internet connection or try a different model.`);
+        let userMessage = `Failed to download model files for ${this.modelId}. Please check your internet connection.`;
+        if (config) {
+          userMessage += `\n\nDiagnostic Info:\nWeights: ${config.model}\nWASM: ${config.model_lib}`;
+        }
+        throw new Error(userMessage);
       }
       throw err;
     }

@@ -22,6 +22,8 @@ export class SkillsEngine {
   private skillMetadata = new Map<string, SkillMetadata>()
   private loadedSkills = new Map<string, ParsedSkill>()
   private initialized = false
+  private readonly MAX_LOADED_SKILLS = 50
+  private loadedSkillsOrder: string[] = []
   
   async init(): Promise<void> {
     // Load all stored skills metadata first (Level 1)
@@ -34,7 +36,7 @@ export class SkillsEngine {
         this.skillMetadata.set(stored.name, metadata)
       } catch (error) {
         const skillName = stored.name || 'unknown'
-        console.error(`Failed to load skill metadata for ${skillName}:`, error)
+        logger.error('skills', `Failed to load skill metadata for ${skillName}`, { error })
         failedSkills.push(skillName)
       }
     }
@@ -234,7 +236,23 @@ print(result)
       tags: skill.tags,
       metadata: skill.metadata
     })
-    this.loadedSkills.set(skill.name, skill)
+    this.addToLoadedSkills(skill.name, skill)
+  }
+
+  private addToLoadedSkills(name: string, skill: ParsedSkill): void {
+    if (this.loadedSkills.has(name)) {
+      // Move to end of order to mark as recently used
+      this.loadedSkillsOrder = this.loadedSkillsOrder.filter(n => n !== name)
+    } else if (this.loadedSkills.size >= this.MAX_LOADED_SKILLS) {
+      // Remove least recently used
+      const lruName = this.loadedSkillsOrder.shift()
+      if (lruName) {
+        this.loadedSkills.delete(lruName)
+      }
+    }
+    
+    this.loadedSkills.set(name, skill)
+    this.loadedSkillsOrder.push(name)
   }
   
   // Get all available skills (metadata only for Level 1 disclosure)
@@ -245,7 +263,11 @@ print(result)
   // Get full skill (loads from storage if needed - Level 2 disclosure)
   async getFullSkill(name: string): Promise<ParsedSkill | undefined> {
     if (this.loadedSkills.has(name)) {
-      return this.loadedSkills.get(name)
+      // Mark as recently used
+      const skill = this.loadedSkills.get(name)!
+      this.loadedSkillsOrder = this.loadedSkillsOrder.filter(n => n !== name)
+      this.loadedSkillsOrder.push(name)
+      return skill
     }
 
     const stored = await skillStorage.getSkill(name)
@@ -253,7 +275,11 @@ print(result)
 
     try {
       const parsed = SkillsParser.parse(stored.content)
-      this.loadedSkills.set(name, parsed)
+      // IMPORTANT: Add resources from stored skill (Level 3 disclosure)
+      if (stored.resources) {
+        parsed.resources = stored.resources
+      }
+      this.addToLoadedSkills(name, parsed)
       return parsed
     } catch (error) {
       logger.error('skills', `Failed to load full skill content for ${name}`, { error })
@@ -330,7 +356,7 @@ print(result)
       // Interpolate parameters
       pythonCode = this.interpolateParams(pythonCode, params)
 
-      // Execute in Python runtime
+      // Execute in Python runtime with resources (Level 3 disclosure)
       let outputResult = ''
       let errorResult: string | undefined
 
@@ -358,8 +384,8 @@ print(result)
           }
         }
 
-        // Execute the code with proper error handling
-        context.pythonRuntime.execute(pythonCode)
+        // Execute the code with proper error handling and resources
+        context.pythonRuntime.execute(pythonCode, skill.resources)
           .catch((err: unknown) => {
             if (!hasResolved) {
               hasResolved = true
@@ -435,7 +461,49 @@ print(result)
   async uninstallSkill(skillName: string): Promise<void> {
     this.skillMetadata.delete(skillName)
     this.loadedSkills.delete(skillName)
+    this.loadedSkillsOrder = this.loadedSkillsOrder.filter(n => n !== skillName)
     await skillStorage.deleteSkill(skillName)
+  }
+
+  // Check if skill exists
+  hasSkill(name: string): boolean {
+    return this.skillMetadata.has(name)
+  }
+
+  // Get skill names
+  getSkillNames(): string[] {
+    return Array.from(this.skillMetadata.keys())
+  }
+
+  // Get skills by tag (Level 1)
+  getByTag(tag: string): SkillMetadata[] {
+    return Array.from(this.skillMetadata.values()).filter(metadata =>
+      metadata.tags?.includes(tag)
+    )
+  }
+
+  // Search skills (Level 1)
+  search(query: string): SkillMetadata[] {
+    const lowerQuery = query.toLowerCase()
+    return Array.from(this.skillMetadata.values()).filter(metadata =>
+      metadata.name.toLowerCase().includes(lowerQuery) ||
+      metadata.description.toLowerCase().includes(lowerQuery) ||
+      metadata.tags?.some((t: string) => t.toLowerCase().includes(lowerQuery))
+    )
+  }
+
+  // Get skill count
+  count(): number {
+    return this.skillMetadata.size
+  }
+
+  // Reload all skills from storage
+  async reload(): Promise<void> {
+    this.skillMetadata.clear()
+    this.loadedSkills.clear()
+    this.loadedSkillsOrder = []
+    this.initialized = false
+    await this.init()
   }
 }
 

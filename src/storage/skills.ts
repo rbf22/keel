@@ -70,20 +70,20 @@ export class SkillStorage {
         // Warn if using more than 80% of quota
         if (quota > 0 && (usage + skillSize) / quota > 0.8) {
           const newUsagePercent = Math.round((usage + skillSize) / quota * 100)
-          console.warn(`Storage quota warning: ${newUsagePercent}% used after saving this skill`)
           logger.warn('skills', 'Storage quota warning', {
             skillName: skill.name,
             currentUsage: usage,
             skillSize,
             quota,
-            usagePercent: newUsagePercent
+            usagePercent: newUsagePercent,
+            message: `Storage quota warning: ${newUsagePercent}% used after saving this skill`
           })
         }
       } catch (error) {
         if (error instanceof Error && error.message.includes('quota exceeded')) {
           throw error
         }
-        console.warn('Could not check storage quota:', error)
+        logger.warn('skills', 'Could not check storage quota', { error })
       }
     }
     
@@ -223,7 +223,7 @@ export class SkillStorage {
         try {
           await this.deleteSkill(skillName);
         } catch (rollbackError) {
-          console.error(`Failed to rollback skill ${skillName}:`, rollbackError);
+          logger.error('skills', `Failed to rollback skill ${skillName}`, { error: rollbackError });
         }
       }
       

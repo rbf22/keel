@@ -172,7 +172,7 @@ export class SecureWebFetcher {
         // If both are null, keep the regex-sanitized content
       } catch (error) {
         // If DOMParser fails, fall back to regex-sanitized content
-        console.warn('DOMParser sanitization failed, using regex fallback:', error);
+        logger.warn('secure-fetch', 'DOMParser sanitization failed, using regex fallback', { error });
       }
     }
     
