@@ -21,25 +21,48 @@ export async function detectBestModel(): Promise<string> {
     const adapter = await gpu.requestAdapter();
     if (!adapter) return DEFAULT_MODEL_ID;
 
+    const hasShaderF16 = adapter.features.has("shader-f16");
     const limits = adapter.limits;
-    // Llama 3.2 3B typically requires larger buffer bindings.
-    // We can check maxStorageBufferBindingSize.
-    // 1GB = 1024 * 1024 * 1024 bytes.
-    const hasEnoughGpuMemory = limits.maxStorageBufferBindingSize >= 1 * 1024 * 1024 * 1024;
+    
+    // Heuristic for available VRAM: often maxStorageBufferBindingSize is a good indicator
+    // but not always the whole picture. 
+    const maxBufferMB = limits.maxStorageBufferBindingSize / (1024 * 1024);
 
-    // Check for Llama 3.2 3B requirement (~2.3 GB VRAM)
-    // We heuristic: if system memory is >= 8GB and adapter has reasonable limits
-    if (memory && memory >= 8 && hasEnoughGpuMemory) {
-      return "Llama-3.2-3B-Instruct-q4f16_1-MLC";
-    }
+    // Sort models by VRAM requirement (descending) to find the best fit
+    const candidates = [...CUSTOM_MODEL_LIST].sort((a, b) => 
+      (b.vram_required_MB || 0) - (a.vram_required_MB || 0)
+    );
 
-    // Fallback to Llama 3.2 1B if we have at least some memory info or just as a better-than-smol default
-    if (memory && memory >= 4) {
-      return "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+    for (const model of candidates) {
+      // Check feature requirements
+      if (model.required_features?.includes("shader-f16") && !hasShaderF16) {
+        continue;
+      }
+
+      // Check VRAM requirements
+      // We use a safety margin: required VRAM should be less than ~80% of what max buffer size suggests
+      // OR if we have deviceMemory info, use that as a proxy for total system capacity.
+      const vramLimit = model.vram_required_MB || 0;
+      
+      // Heuristic: If we have 8GB+ system RAM, we can likely handle Llama 3B (2.2GB VRAM)
+      // if the GPU adapter limits allow large enough buffers.
+      if (memory && memory >= 8 && vramLimit > 2000) {
+        if (maxBufferMB >= 1024) return model.model_id;
+      }
+      
+      if (memory && memory >= 4 && vramLimit > 800) {
+        if (maxBufferMB >= 512) return model.model_id;
+      }
+
+      // If it's a very small model (like SmolLM 360M), just check shader support
+      if (vramLimit < 800) {
+        return model.model_id;
+      }
     }
 
     return DEFAULT_MODEL_ID;
   } catch (e) {
+    logger.warn("llm", "Error detecting best model, falling back to default", { error: e });
     return DEFAULT_MODEL_ID;
   }
 }
@@ -48,10 +71,17 @@ export interface ModelInfo {
   modelId: string;
   displayName: string;
   vramRequiredMB?: number;
+  requiredFeatures?: string[];
+  recommendedConfig?: {
+    temperature?: number;
+    top_p?: number;
+    presence_penalty?: number;
+    frequency_penalty?: number;
+  };
 }
 
 // Custom model configuration to handle potential fetch failures from default CDNs
-export const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
+export const CUSTOM_MODEL_LIST: (webllm.ModelRecord & { recommended_config?: ModelInfo['recommendedConfig'] })[] = [
   {
     model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
     model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/",
@@ -62,6 +92,24 @@ export const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
     overrides: {
       context_window_size: 4096,
     },
+    recommended_config: {
+      temperature: 0.7,
+      top_p: 0.95,
+    }
+  },
+  {
+    model_id: "SmolLM2-360M-Instruct-q4f32_1-MLC",
+    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f32_1-MLC/resolve/main/",
+    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/SmolLM2-360M-Instruct-q4f32_1-ctx4k_cs1k-webgpu.wasm",
+    vram_required_MB: 750.00,
+    low_resource_required: true,
+    overrides: {
+      context_window_size: 4096,
+    },
+    recommended_config: {
+      temperature: 0.7,
+      top_p: 0.95,
+    }
   },
   {
     model_id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
@@ -69,9 +117,28 @@ export const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
     model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
     vram_required_MB: 879.04,
     low_resource_required: true,
+    required_features: ["shader-f16"],
     overrides: {
       context_window_size: 4096,
     },
+    recommended_config: {
+      temperature: 0.6,
+      top_p: 0.9,
+    }
+  },
+  {
+    model_id: "Llama-3.2-1B-Instruct-q4f32_1-MLC",
+    model: "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f32_1-MLC/resolve/main/",
+    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-1B-Instruct-q4f32_1-ctx4k_cs1k-webgpu.wasm",
+    vram_required_MB: 1700.00,
+    low_resource_required: true,
+    overrides: {
+      context_window_size: 4096,
+    },
+    recommended_config: {
+      temperature: 0.6,
+      top_p: 0.9,
+    }
   },
   {
     model_id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
@@ -79,9 +146,14 @@ export const CUSTOM_MODEL_LIST: webllm.ModelRecord[] = [
     model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
     vram_required_MB: 2263.69,
     low_resource_required: true,
+    required_features: ["shader-f16"],
     overrides: {
       context_window_size: 4096,
     },
+    recommended_config: {
+      temperature: 0.6,
+      top_p: 0.9,
+    }
   },
 ];
 
@@ -99,6 +171,8 @@ export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_MODEL_LIST.map(m => ({
   modelId: m.model_id,
   displayName: m.model_id.split('-MLC')[0].replace(/-/g, ' '),
   vramRequiredMB: m.vram_required_MB,
+  requiredFeatures: m.required_features,
+  recommendedConfig: m.recommended_config,
 }));
 
 export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
@@ -133,8 +207,33 @@ Guidelines:
 - If previous code failed, analyze the error and provide a corrected version.
 - Be concise and focus on solving the user's request efficiently.`;
 
+// Fix various problems in webllm generation
+export function fixMessage(message: string) {
+  // RedPajama model incorrectly includes `<human` in response
+  message = message.replace(/(<human\s*)+$/, "");
+  // Remove Qwen think tags and content if needed (optional based on UX)
+  // message = message.replace(/<think>[\s\S]*?<\/think>/g, "");
+  return message;
+}
+
+export function mapError(err: unknown, modelId: string): string {
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  
+  if (errorMessage.includes("WebGPU") && errorMessage.includes("compatibility chart")) {
+    return `WebGPU error: Your browser or hardware may not support this model. Check the [WebGPU compatibility chart](https://caniuse.com/webgpu).`;
+  }
+  
+  if (errorMessage.includes("Failed to fetch")) {
+    return `Failed to download model files for ${modelId}. Please check your internet connection.`;
+  }
+
+  return errorMessage;
+}
+
+const KEEP_ALIVE_INTERVAL = 5000;
+
 export class LocalLLMEngine implements ILLMEngine {
-  private engine: webllm.MLCEngineInterface | null = null;
+  private engine: webllm.ServiceWorkerMLCEngine | null = null;
   private onUpdate: (message: string) => void;
   private modelId: string;
   private isGenerating = false;
@@ -149,39 +248,32 @@ export class LocalLLMEngine implements ILLMEngine {
       this.onUpdate("Checking WebGPU...");
       await checkWebGPU();
 
-      this.onUpdate("Initializing Engine...");
-      const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
-      if (config) {
-        logger.info("llm", `Initializing engine for ${this.modelId}`, {
-          model: config.model,
-          model_lib: config.model_lib
-        });
-        
-        // Use the MLCEngine constructor + reload pattern for better control/logging
-        const engine = new webllm.MLCEngine({
-          appConfig: CUSTOM_APP_CONFIG,
-          initProgressCallback: (report: webllm.InitProgressReport) => {
-            this.onUpdate(`Loading: ${report.text}`);
-            logger.info("llm", `Init progress: ${report.text}`, { progress: report.progress });
-          },
-        });
-
-        this.onUpdate(`Reloading model: ${this.modelId}...`);
-        await engine.reload(this.modelId);
-        this.engine = engine;
-      } else {
-        // Fallback for models not in our custom list (should not happen with SUPPORTED_MODELS sync)
-        logger.warn("llm", `Model ${this.modelId} not found in CUSTOM_MODEL_LIST, falling back to default prebuilt config`);
-        this.engine = await webllm.CreateMLCEngine(this.modelId, {
-          initProgressCallback: (report: webllm.InitProgressReport) => {
-            this.onUpdate(`Loading: ${report.text}`);
-          },
-        });
-      }
+      this.onUpdate("Initializing Service Worker Engine...");
       
-      logger.info("llm", `Local engine initialized successfully: ${this.modelId}`);
+      const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
+      
+      // Use ServiceWorkerMLCEngine for better background persistence
+      const engine = new webllm.ServiceWorkerMLCEngine({
+        appConfig: CUSTOM_APP_CONFIG,
+        initProgressCallback: (report: webllm.InitProgressReport) => {
+          this.onUpdate(`Loading: ${report.text}`);
+          logger.info("llm", `Init progress: ${report.text}`, { progress: report.progress });
+        },
+      }, KEEP_ALIVE_INTERVAL);
+
+      this.onUpdate(`Reloading model: ${this.modelId}...`);
+      
+      // Pass the recommended config if available
+      const reloadOptions = config?.recommended_config ? {
+        ...config.recommended_config
+      } : {};
+
+      await engine.reload(this.modelId, reloadOptions);
+      this.engine = engine;
+      
+      logger.info("llm", `Local engine (Service Worker) initialized successfully: ${this.modelId}`);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = mapError(err, this.modelId);
       const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
       
       let diagnosticInfo = `Failed to initialize local engine (${this.modelId}): ${errorMessage}`;
@@ -190,15 +282,7 @@ export class LocalLLMEngine implements ILLMEngine {
       }
       
       logger.error("llm", diagnosticInfo, { error: err });
-      
-      if (errorMessage.includes("Failed to fetch")) {
-        let userMessage = `Failed to download model files for ${this.modelId}. Please check your internet connection.`;
-        if (config) {
-          userMessage += `\n\nDiagnostic Info:\nWeights: ${config.model}\nWASM: ${config.model_lib}`;
-        }
-        throw new Error(userMessage);
-      }
-      throw err;
+      throw new Error(errorMessage);
     }
   }
 
@@ -209,20 +293,20 @@ export class LocalLLMEngine implements ILLMEngine {
     }
 
     if (this.isGenerating) {
-      logger.warn("llm", "Generation already in progress, waiting...");
-      // Simple busy wait or throw error? Better to prevent UI from sending.
+      logger.warn("llm", "Generation already in progress");
       throw new Error("Generation already in progress");
     }
 
     this.isGenerating = true;
 
-    // Small delay to ensure WebLLM worker/tokenizer state is settled
+    // Small delay to ensure WebLLM worker state is settled
     await new Promise(resolve => setTimeout(resolve, 250));
 
     const { onToken, history = [], systemOverride, signal } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
 
     if (signal?.aborted) {
+      this.isGenerating = false;
       throw new Error("Generation aborted");
     }
 
@@ -232,16 +316,19 @@ export class LocalLLMEngine implements ILLMEngine {
       { role: "user", content: prompt },
     ];
 
-    logger.info("llm", "Starting local generation", { messages });
+    const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
+    
+    logger.info("llm", "Starting local generation (SW)", { messages });
     const startTime = performance.now();
 
-    const chunks = await this.engine.chat.completions.create({
-      messages,
-      stream: true,
-    });
-
-    let fullText = "";
     try {
+      const chunks = await this.engine.chat.completions.create({
+        messages,
+        stream: true,
+        ...config?.recommended_config
+      });
+
+      let fullText = "";
       for await (const chunk of chunks) {
         if (signal?.aborted) {
           logger.info("llm", "Local generation aborted by signal");
@@ -249,24 +336,24 @@ export class LocalLLMEngine implements ILLMEngine {
         }
         const content = chunk.choices[0]?.delta?.content || "";
         fullText += content;
-        onToken(fullText);
+        onToken(fixMessage(fullText));
       }
+
+      const endTime = performance.now();
+      logger.info("llm", "Local generation complete", {
+        durationMs: endTime - startTime,
+        tokenCountEstimate: fullText.length / 4,
+        fullText: fixMessage(fullText)
+      });
+
+      return fixMessage(fullText);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = mapError(err, this.modelId);
       logger.error("llm", `Local generation error: ${errorMessage}`, { error: err });
-      throw err;
+      throw new Error(errorMessage);
     } finally {
       this.isGenerating = false;
     }
-
-    const endTime = performance.now();
-    logger.info("llm", "Local generation complete", {
-      durationMs: endTime - startTime,
-      tokenCountEstimate: fullText.length / 4,
-      fullText
-    });
-
-    return fullText;
   }
 
   async getStats() {
