@@ -165,6 +165,8 @@ export class SecureWebFetcher {
         if (doc.body) {
           sanitized = doc.body.innerHTML;
         } else if (doc.documentElement && doc.documentElement.textContent) {
+          // Fallback to text content when body is not available
+          // Note: This loses HTML structure but provides safe text content
           sanitized = doc.documentElement.textContent;
         }
         // If both are null, keep the regex-sanitized content
@@ -193,7 +195,7 @@ export class SecureWebFetcher {
         if (typeof result === 'string') {
           return result;
         }
-        return result?.data || result?.contents || JSON.stringify(result);
+        return result?.data || result?.contents || null;
       default:
         return null;
     }
