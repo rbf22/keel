@@ -32,6 +32,15 @@ vi.mock('../storage/skills', () => ({
 // Mock Python runtime
 const mockPythonRuntime: PythonRuntime = {
   execute: vi.fn(),
+  executeWithTemporaryOutput: vi.fn().mockImplementation(async (handler, fn) => {
+    const oldHandler = mockPythonRuntime.onOutput
+    mockPythonRuntime.onOutput = handler
+    try {
+      return await fn()
+    } finally {
+      mockPythonRuntime.onOutput = oldHandler
+    }
+  }),
   onOutput: vi.fn()
 }
 

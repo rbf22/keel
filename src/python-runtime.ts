@@ -19,6 +19,7 @@ export class PythonRuntime {
   private currentReject: ((error: Error) => void) | null = null;
 
   constructor(onOutput: (output: PythonOutput) => void) {
+    logger.info('python', 'PythonRuntime initialized');
     // Initialize handler manager with the default handler
     this.outputHandlers = new HandlerManager(onOutput);
   }
@@ -62,17 +63,20 @@ export class PythonRuntime {
   }
 
   async init() {
+    logger.info('python', 'Initializing Python runtime');
     return new Promise<void>((resolve, reject) => {
       // In Vite, you can use new Worker(new URL('./path', import.meta.url))
+      logger.debug('python', 'Creating Python worker');
       this.worker = new Worker(new URL('./python-worker.ts', import.meta.url), {
         type: 'module'
       });
 
       this.worker.onmessage = (event) => {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        logger.info('python', `Worker output: ${output.type}`, output);
+        logger.debug('python', `Worker output: ${output.type}`, output);
         
         if (output.type === 'ready') {
+          logger.info('python', 'Python runtime ready');
           this.isReady = true;
           this.onOutput(output);
           resolve();
@@ -106,17 +110,29 @@ export class PythonRuntime {
   }
 
   async execute(code: string, resources?: Record<string, string>) {
+    logger.info('python', 'Code execution requested', { 
+      codeLength: code.length,
+      hasResources: !!resources,
+      resourceCount: resources ? Object.keys(resources).length : 0,
+      queueLength: this.executionQueue.length
+    });
+    
     if (!this.worker || !this.isReady) {
-      logger.error('python', 'Python runtime not ready');
+      logger.error('python', 'Python runtime not ready for execution');
       throw new Error('Python runtime not ready');
     }
 
     // Use a unique ID for each execution to handle timeouts safely
     const executionId = Math.random().toString(36).substring(7);
+    logger.debug('python', 'Generated execution ID', { executionId });
 
     // Add to queue and wait for turn
     return new Promise<void>((resolve, reject) => {
       this.executionQueue.push({ code, resources, resolve, reject, executionId });
+      logger.debug('python', 'Added to execution queue', { 
+        executionId,
+        queueLength: this.executionQueue.length 
+      });
       void this.processQueue();
     });
   }
@@ -129,17 +145,32 @@ export class PythonRuntime {
     const task = this.executionQueue.shift();
     if (!task) return;
 
+    logger.info('python', 'Processing execution queue', {
+      executionId: task.executionId,
+      queueLength: this.executionQueue.length,
+      isExecuting: this.isExecuting
+    });
+
     this.isExecuting = true;
     try {
       if (!this.worker || !this.isReady) {
+        logger.error('python', 'Python runtime terminated or not ready during queue processing');
         throw new Error('Python runtime terminated or not ready');
       }
       await this.internalExecute(task.code, task.resources, task.executionId);
+      logger.info('python', 'Execution completed successfully', { executionId: task.executionId });
       task.resolve();
     } catch (error) {
+      logger.error('python', 'Execution failed', { 
+        executionId: task.executionId,
+        error: error instanceof Error ? error.message : String(error)
+      });
       task.reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
       this.isExecuting = false;
+      logger.debug('python', 'Execution finished, processing next in queue', {
+        remainingQueue: this.executionQueue.length
+      });
       void this.processQueue();
     }
   }
@@ -149,7 +180,11 @@ export class PythonRuntime {
       throw new Error('Python worker lost during execution');
     }
 
-    logger.info('python', 'Executing code', { code, hasResources: !!resources, executionId });
+    logger.info('python', 'Starting code execution', { 
+      codeLength: code.length,
+      hasResources: !!resources,
+      executionId 
+    });
     const startTime = performance.now();
 
     return new Promise<void>((resolve, reject) => {
@@ -158,6 +193,8 @@ export class PythonRuntime {
 
       const handleMessage = (event: MessageEvent) => {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        logger.debug('python', `Execution message: ${output.type}`, { executionId });
+        
         if (output.type === 'complete' || output.type === 'error') {
           // Clear current reject
           this.currentReject = null;
@@ -171,10 +208,16 @@ export class PythonRuntime {
           
           if (output.type === 'complete') {
             const duration = performance.now() - startTime;
-            logger.info('python', 'Execution complete', { durationMs: duration, executionId });
+            logger.info('python', 'Execution completed successfully', { 
+              durationMs: duration, 
+              executionId 
+            });
             resolve();
           } else {
-            logger.error('python', `Execution error: ${output.message}`, { executionId });
+            logger.error('python', `Execution error: ${output.message}`, { 
+              executionId,
+              errorMessage: output.message 
+            });
             reject(new Error(output.message));
           }
         }
@@ -182,11 +225,16 @@ export class PythonRuntime {
 
       this.worker!.addEventListener('message', handleMessage);
 
+      logger.debug('python', 'Sending code to worker', { executionId });
       this.worker!.postMessage(JSON.stringify({ type: 'execute', code, resources, executionId }));
 
       this.currentTimeout = timeout = setTimeout(() => {
         // Check if this timeout is still the current one (prevents race conditions)
         if (this.currentTimeout === timeout && this.worker) {
+          logger.warn('python', 'Execution timed out', { 
+            executionId,
+            timeoutMs: this.executionTimeout 
+          });
           // Remove event listener first to prevent memory leaks
           this.worker.removeEventListener('message', handleMessage);
           // Clear current reject
@@ -204,14 +252,23 @@ export class PythonRuntime {
   }
 
   terminate() {
+    logger.warn('python', 'Terminating Python runtime', {
+      isExecuting: this.isExecuting,
+      queueLength: this.executionQueue.length,
+      hasWorker: !!this.worker,
+      hasTimeout: this.currentTimeout !== undefined
+    });
+    
     // Clear any pending timeout
     if (this.currentTimeout !== undefined) {
       clearTimeout(this.currentTimeout);
       this.currentTimeout = undefined;
+      logger.debug('python', 'Cleared execution timeout');
     }
     
     // Reject currently executing task
     if (this.currentReject) {
+      logger.debug('python', 'Rejecting currently executing task');
       this.currentReject(new Error('Python runtime terminated'));
       this.currentReject = null;
     }
@@ -222,14 +279,17 @@ export class PythonRuntime {
     this.executionQueue = [];
     this.isExecuting = false;
     
+    logger.info('python', 'Rejecting pending tasks', { pendingTaskCount: pendingTasks.length });
     for (const task of pendingTasks) {
       task.reject(error);
     }
     
     if (this.worker) {
+      logger.debug('python', 'Terminating Python worker');
       this.worker.terminate();
       this.worker = null;
       this.isReady = false;
+      logger.info('python', 'Python runtime terminated successfully');
     }
   }
 }

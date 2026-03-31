@@ -34,6 +34,15 @@ describe('Level 3 Resource Integration', () => {
       }
       return Promise.resolve()
     }),
+    executeWithTemporaryOutput: vi.fn().mockImplementation(async function(this: any, handler: any, fn: any) {
+      const oldHandler = this.onOutput
+      this.onOutput = handler
+      try {
+        return await fn()
+      } finally {
+        this.onOutput = oldHandler
+      }
+    }),
     onOutput: null as any,
     restoreHandler: vi.fn()
   }

@@ -3,27 +3,48 @@ import { logger } from "./logger"
 import { MODEL_VRAM_THRESHOLDS, LLM_GENERATION_DELAY } from "./constants"
 
 export async function checkWebGPU() {
+  logger.debug('llm', 'Checking WebGPU support');
   if (!(navigator as unknown as { gpu?: GPU }).gpu) {
+    logger.error('llm', 'WebGPU not supported on this browser');
     throw new Error("WebGPU is not supported on this browser.");
   }
   const adapter = await (navigator as unknown as { gpu: GPU }).gpu.requestAdapter();
   if (!adapter) {
+    logger.error('llm', 'WebGPU adapter not found');
     throw new Error("WebGPU adapter not found.");
   }
+  logger.info('llm', 'WebGPU support confirmed', { 
+    adapterInfo: (adapter as any).info || 'Unknown',
+    hasShaderF16: adapter.features.has('shader-f16')
+  });
   return true;
 }
 
 export async function detectBestModel(): Promise<string> {
+  logger.info('llm', 'Starting best model detection');
   try {
     const memory = (navigator as unknown as { deviceMemory?: number }).deviceMemory; // in GB
     const gpu = (navigator as unknown as { gpu?: GPU }).gpu;
-    if (!gpu) return DEFAULT_MODEL_ID;
+    if (!gpu) {
+      logger.warn('llm', 'No GPU available, using default model');
+      return DEFAULT_MODEL_ID;
+    }
 
     const adapter = await gpu.requestAdapter();
-    if (!adapter) return DEFAULT_MODEL_ID;
+    if (!adapter) {
+      logger.warn('llm', 'GPU adapter not found, using default model');
+      return DEFAULT_MODEL_ID;
+    }
 
     const hasShaderF16 = adapter.features.has("shader-f16");
     const limits = adapter.limits;
+    
+    logger.debug('llm', 'GPU capabilities detected', {
+      deviceMemoryGB: memory,
+      adapterInfo: (adapter as any).info || 'Unknown',
+      hasShaderF16,
+      maxStorageBufferBindingSize: limits.maxStorageBufferBindingSize
+    });
     
     // Heuristic for available VRAM: often maxStorageBufferBindingSize is a good indicator
     // but not always the whole picture. 
@@ -35,6 +56,9 @@ export async function detectBestModel(): Promise<string> {
     for (const model of candidates) {
       // Check feature requirements
       if (model.required_features?.includes("shader-f16") && !hasShaderF16) {
+        logger.debug('llm', 'Skipping model due to missing shader-f16 feature', { 
+          modelId: model.model_id 
+        });
         continue;
       }
 
@@ -43,22 +67,49 @@ export async function detectBestModel(): Promise<string> {
       // OR if we have deviceMemory info, use that as a proxy for total system capacity.
       const vramLimit = model.vram_required_MB || 0;
       
+      logger.debug('llm', 'Evaluating model', { 
+        modelId: model.model_id,
+        vramRequiredMB: vramLimit,
+        maxBufferMB
+      });
+      
       // Heuristic: If we have 8GB+ system RAM, we can likely handle Llama 3B (2.2GB VRAM)
       // if the GPU adapter limits allow large enough buffers.
       if (memory && memory >= MODEL_VRAM_THRESHOLDS.HIGH_MEMORY_THRESHOLD && vramLimit > MODEL_VRAM_THRESHOLDS.MEDIUM_MODEL) {
-        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.HIGH_BUFFER_SIZE) return model.model_id;
+        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.HIGH_BUFFER_SIZE) {
+          logger.info('llm', 'Selected high-memory model', { 
+            modelId: model.model_id,
+            systemMemoryGB: memory,
+            vramRequiredMB: vramLimit
+          });
+          return model.model_id;
+        }
       }
       
       if (memory && memory >= MODEL_VRAM_THRESHOLDS.MEDIUM_MEMORY_THRESHOLD && vramLimit > MODEL_VRAM_THRESHOLDS.SMALL_MODEL) {
-        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.MEDIUM_BUFFER_SIZE) return model.model_id;
+        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.MEDIUM_BUFFER_SIZE) {
+          logger.info('llm', 'Selected medium-memory model', { 
+            modelId: model.model_id,
+            systemMemoryGB: memory,
+            vramRequiredMB: vramLimit
+          });
+          return model.model_id;
+        }
       }
 
       // If it's a very small model (like SmolLM 360M), just check shader support
       if (vramLimit < MODEL_VRAM_THRESHOLDS.SMALL_MODEL) {
+        logger.info('llm', 'Selected small model', { 
+          modelId: model.model_id,
+          vramRequiredMB: vramLimit
+        });
         return model.model_id;
       }
     }
 
+    logger.warn('llm', 'No suitable model found, using default', { 
+      defaultModel: DEFAULT_MODEL_ID 
+    });
     return DEFAULT_MODEL_ID;
   } catch (e) {
     logger.warn("llm", "Error detecting best model, falling back to default", { error: e });
@@ -189,7 +240,7 @@ function getSortedModelList(): typeof CUSTOM_MODEL_LIST {
 }
 
 export interface GenerateOptions {
-  onToken: (text: string) => void;
+  onToken?: (text: string) => void;
   history?: webllm.ChatCompletionMessageParam[];
   systemOverride?: string;
   signal?: AbortSignal;
@@ -295,7 +346,17 @@ export class LocalLLMEngine implements ILLMEngine {
     }
   }
 
-  async generate(prompt: string, options: GenerateOptions) {
+  async generate(prompt: string, options: GenerateOptions = {}) {
+    logger.info('llm', 'Local generation request started', { 
+      modelId: this.modelId,
+      promptLength: prompt.length,
+      hasHistory: !!options.history,
+      historyLength: options.history?.length || 0,
+      hasSystemOverride: !!options.systemOverride,
+      hasSignal: !!options.signal,
+      hasOnToken: !!options.onToken
+    });
+
     if (!this.engine) {
       logger.error("llm", "Local engine not initialized");
       throw new Error("Local engine not initialized");
@@ -307,6 +368,7 @@ export class LocalLLMEngine implements ILLMEngine {
     }
 
     this.isGenerating = true;
+    logger.debug('llm', 'Set generating flag to true');
 
     // Small delay to ensure WebLLM worker state is settled
     await new Promise(resolve => setTimeout(resolve, LLM_GENERATION_DELAY));
@@ -315,6 +377,7 @@ export class LocalLLMEngine implements ILLMEngine {
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;
 
     if (signal?.aborted) {
+      logger.info('llm', 'Generation aborted before start');
       this.isGenerating = false;
       throw new Error("Generation aborted");
     }
@@ -327,7 +390,11 @@ export class LocalLLMEngine implements ILLMEngine {
 
     const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
     
-    logger.info("llm", "Starting local generation (SW)", { messages });
+    logger.info("llm", "Starting local generation (SW)", { 
+      messageCount: messages.length,
+      systemPromptLength: systemPrompt.length,
+      modelConfig: config?.recommended_config
+    });
     const startTime = performance.now();
 
     try {
@@ -345,7 +412,9 @@ export class LocalLLMEngine implements ILLMEngine {
         }
         const content = chunk.choices[0]?.delta?.content || "";
         fullText += content;
-        onToken(fixMessage(fullText));
+        if (onToken) {
+          onToken(fixMessage(fullText));
+        }
       }
 
       const endTime = performance.now();
@@ -458,7 +527,9 @@ export class OnlineLLMEngine implements ILLMEngine {
               const parsed = JSON.parse(data);
               const content = parsed.choices[0]?.delta?.content || "";
               fullText += content;
-              onToken(fullText);
+              if (onToken) {
+                onToken(fullText);
+              }
             } catch (e) {
               // Ignore parse errors for partial chunks
             }

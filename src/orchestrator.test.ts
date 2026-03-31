@@ -36,7 +36,8 @@ vi.mock('./logger', () => ({
   logger: {
     info: vi.fn(),
     error: vi.fn(),
-    warn: vi.fn()
+    warn: vi.fn(),
+    debug: vi.fn()
   }
 }))
 
@@ -63,6 +64,15 @@ describe('OrchestratorTestAdapter', () => {
     mockPython = {
       onOutput: vi.fn(),
       execute: vi.fn(),
+      executeWithTemporaryOutput: vi.fn().mockImplementation(async (handler, fn) => {
+        const oldHandler = mockPython.onOutput
+        mockPython.onOutput = handler
+        try {
+          return await fn()
+        } finally {
+          mockPython.onOutput = oldHandler
+        }
+      }),
       initialized: false,
       init: vi.fn(),
       reset: vi.fn()

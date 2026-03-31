@@ -26,14 +26,24 @@ export class SkillsEngine {
   private loadedSkillsOrder: string[] = []
   
   async init(): Promise<void> {
+    logger.info('skills', 'Initializing SkillsEngine');
     // Load all stored skills metadata first (Level 1)
     const storedSkills = await skillStorage.getAllSkills()
     const failedSkills: string[] = []
+    
+    logger.info('skills', 'Loading stored skills metadata', { 
+      totalStoredSkills: storedSkills.length 
+    });
     
     for (const stored of storedSkills) {
       try {
         const metadata = SkillsParser.parseMetadata(stored.content)
         this.skillMetadata.set(stored.name, metadata)
+        logger.debug('skills', 'Loaded skill metadata', { 
+          skillName: stored.name,
+          hasTags: !!metadata.tags,
+          tagCount: metadata.tags?.length || 0
+        });
       } catch (error) {
         const skillName = stored.name || 'unknown'
         logger.error('skills', `Failed to load skill metadata for ${skillName}`, { error })
@@ -324,18 +334,36 @@ print(result)
     params: Record<string, unknown>, 
     context: SkillExecutionContext
   ): Promise<SkillExecutionResult> {
+    logger.info('skills', 'Skill execution requested', { 
+      skillName,
+      paramCount: Object.keys(params).length,
+      paramNames: Object.keys(params),
+      hasUserMessage: !!context.userMessage,
+      hasConversationHistory: !!context.conversationHistory,
+      timeout: context.timeout
+    });
+    
     if (!this.initialized) {
+      logger.debug('skills', 'SkillsEngine not initialized, initializing now');
       await this.init()
     }
 
     // Load full skill on demand (Level 2 disclosure)
     const skill = await this.getFullSkill(skillName)
     if (!skill) {
+      logger.error('skills', 'Skill not found', { skillName });
       return {
         success: false,
         error: `Skill not found: ${skillName}`
       }
     }
+
+    logger.debug('skills', 'Found skill', { 
+      skillName,
+      hasInstructions: !!skill.instructions,
+      codeBlockCount: skill.codeBlocks.length,
+      hasTags: !!skill.tags
+    });
 
     try {
       // Find Python code blocks (prefer converted if available)
@@ -344,81 +372,118 @@ print(result)
       )
 
       if (!pythonBlock) {
+        logger.error('skills', 'No Python code found in skill', { 
+          skillName,
+          availableLanguages: skill.codeBlocks.map(b => b.language)
+        });
         return {
           success: false,
           error: `No Python code found in skill: ${skillName}`
         }
       }
 
+      logger.debug('skills', 'Found Python code block', { 
+        skillName,
+        isConverted: !!pythonBlock.converted,
+        codeLength: pythonBlock.code.length
+      });
+
       // Use converted code if available
       let pythonCode = pythonBlock.converted || pythonBlock.code
 
       // Interpolate parameters
       pythonCode = this.interpolateParams(pythonCode, params)
+      logger.debug('skills', 'Parameters interpolated', { 
+        skillName,
+        finalCodeLength: pythonCode.length
+      });
 
       // Execute in Python runtime with resources (Level 3 disclosure)
       let outputResult = ''
       let errorResult: string | undefined
 
-      // Create a promise to capture the output with proper race condition handling
-      const executionPromise = new Promise<void>((resolve, reject) => {
-        const originalOutputHandler = context.pythonRuntime.onOutput
-        let hasResolved = false
-
-        // Set handler BEFORE executing
-        context.pythonRuntime.onOutput = (output: PythonOutput) => {
+      // Use a temporary output handler to capture the output with proper race condition handling
+      logger.info('skills', 'Starting Python execution for skill', { 
+        skillName,
+        codeLength: pythonCode.length,
+        hasResources: !!skill.resources,
+        timeoutMs: context.timeout || 30000
+      });
+      
+      const executionPromise = context.pythonRuntime.executeWithTemporaryOutput(
+        (output: PythonOutput) => {
+          logger.debug('skills', `Python output: ${output.type}`, { 
+            skillName,
+            outputType: output.type,
+            hasMessage: !!output.message
+          });
+          
           if (output.type === 'log' && output.message) {
             outputResult += output.message + '\n'
           } else if (output.type === 'error' && output.message) {
+            logger.warn('skills', 'Python execution error', { 
+              skillName,
+              errorMessage: output.message 
+            });
             errorResult = output.message
-            // Resolve immediately on error - don't wait for complete
-            if (!hasResolved) {
-              hasResolved = true
-              resolve()
-            }
-          } else if (output.type === 'complete') {
-            if (!hasResolved) {
-              hasResolved = true
-              resolve()
-            }
+          }
+        },
+        async () => {
+          try {
+            await context.pythonRuntime.execute(pythonCode, skill.resources);
+          } catch (err: unknown) {
+            errorResult = err instanceof Error ? err.message : String(err);
+            logger.error('skills', 'Python execution threw error', { 
+              skillName,
+              error: errorResult
+            });
+            throw err;
           }
         }
-
-        // Execute the code with proper error handling and resources
-        context.pythonRuntime.execute(pythonCode, skill.resources)
-          .catch((err: unknown) => {
-            if (!hasResolved) {
-              hasResolved = true
-              errorResult = err instanceof Error ? err.message : String(err)
-              reject(err)
-            }
-          })
-          .finally(() => {
-            // Always restore original handler
-            context.pythonRuntime.onOutput = originalOutputHandler
-          })
-      })
+      );
 
       // Wait for execution with timeout (configurable, default 30 seconds)
       const timeoutMs = context.timeout || 30000;
+      logger.debug('skills', 'Setting up execution timeout', { skillName, timeoutMs });
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Skill execution timeout after ${timeoutMs}ms`)), timeoutMs)
+        setTimeout(() => {
+          logger.error('skills', 'Skill execution timed out', { skillName, timeoutMs });
+          reject(new Error(`Skill execution timeout after ${timeoutMs}ms`))
+        }, timeoutMs)
       })
 
       // Race the execution against timeout with proper cleanup
       await Promise.race([executionPromise, timeoutPromise])
 
-      return {
+      const result = {
         success: !errorResult,
         output: outputResult || '',
         pythonCode,
         error: errorResult
-      }
+      };
+      
+      logger.info('skills', 'Skill execution completed', { 
+        skillName,
+        success: result.success,
+        hasOutput: !!result.output,
+        outputLength: result.output.length,
+        hasError: !!result.error,
+        pythonCodeLength: pythonCode.length
+      });
+      
+      return result
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error('skills', 'Skill execution failed with exception', { 
+        skillName,
+        error: errorMessage,
+        errorType: error instanceof Error ? error.constructor.name : 'Unknown'
+      });
+      
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: errorMessage
       }
     }
   }

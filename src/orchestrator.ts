@@ -109,7 +109,11 @@ export class AgentOrchestrator {
   }
 
   async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "observer"], signal?: AbortSignal) {
-    logger.info("orchestrator", "Starting complex task with tools", { userRequest, activePersonaIds });
+    logger.info("orchestrator", "Starting complex task with tools", { 
+      userRequest, 
+      activePersonaIds,
+      requestLength: userRequest.length 
+    });
     
     // Reset loop detection state for fresh task
     this.resetLoopDetection();
@@ -120,6 +124,7 @@ export class AgentOrchestrator {
     let lastAgentId = "";
     let noProgressCount = 0;
 
+    logger.debug("orchestrator", "Adding user request to chat history", { userRequest });
     this.chatHistory.push({ role: "user", content: userRequest });
 
     let nextAgentId = "manager";
@@ -131,14 +136,23 @@ export class AgentOrchestrator {
         throw new Error("Task aborted");
       }
       loopCount++;
-      logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
+      logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`, {
+        loopCount,
+        agentId: nextAgentId,
+        instructionLength: nextAgentInstruction.length,
+        maxLoops: this.maxLoops
+      });
       
       // Handle reviewer code injection before state hashing
       if (nextAgentId === "reviewer" && nextAgentInstruction.includes("Review the Python code")) {
+        logger.debug("orchestrator", "Injecting Python code context for reviewer");
         // Find the last Python code block in chat history to provide better context
         const lastCoderMessage = [...this.chatHistory].reverse().find(m => m.role === "assistant" && typeof m.content === 'string' && m.content.includes("```python"));
         if (lastCoderMessage && typeof lastCoderMessage.content === 'string') {
+            logger.debug("orchestrator", "Found Python code block for reviewer context");
             nextAgentInstruction += `\n\nCode to review:\n${lastCoderMessage.content}`;
+        } else {
+            logger.debug("orchestrator", "No Python code block found for reviewer context");
         }
       }
 
@@ -203,6 +217,11 @@ export class AgentOrchestrator {
       }
 
       const persona = PERSONAS[nextAgentId];
+      logger.debug("orchestrator", "Retrieved persona for execution", { 
+        agentId: nextAgentId, 
+        personaName: persona.name,
+        personaId: persona.id 
+      });
       const personaPrompt = await getSystemContext(persona);
       const taskPrompt = nextAgentId === "manager"
         ? `Current User Request: "${userRequest}"
@@ -212,6 +231,12 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
       // Add skills context to system prompt
       const skillsContext = skillsEngine.getSkillsDescription();
       const enhancedPersonaPrompt = personaPrompt + `\n\nAvailable Skills:\n${skillsContext}\n\nWhen you need to use a skill, format it as: <skill name="skillName">{"param": "value"}</skill>`;
+      
+      logger.debug("orchestrator", "Starting LLM generation for agent", { 
+        agentId: nextAgentId,
+        taskPromptLength: taskPrompt.length,
+        hasSystemOverride: !!enhancedPersonaPrompt
+      });
       
       let agentContent = "";
       await this.engine.generate(taskPrompt, {
@@ -224,9 +249,18 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
         signal
       });
 
+      logger.info("orchestrator", "Agent LLM generation completed", { 
+        agentId: nextAgentId,
+        responseLength: agentContent.length,
+        hasFinish: agentContent.includes("FINISH")
+      });
       this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
 
       if (agentContent.includes("FINISH") && nextAgentId === "manager") {
+        logger.info("orchestrator", "Task completed by manager agent", { 
+          loopCount,
+          agentId: nextAgentId 
+        });
         taskComplete = true;
         break;
       }
@@ -234,11 +268,26 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
       // 3. Automated Observation & Tool Handling
       const toolCall = this.parseToolCall(agentContent);
       const skillCalls = skillsEngine.parseSkillCalls(agentContent);
+      logger.debug("orchestrator", "Parsed agent response for tools and skills", { 
+        agentId: nextAgentId,
+        hasToolCall: !!toolCall,
+        toolName: toolCall?.name,
+        skillCount: skillCalls.length,
+        skillNames: skillCalls.map(s => s.name)
+      });
       let toolResult = "";
       
       // Handle skill calls
       if (skillCalls.length > 0) {
+        logger.info("orchestrator", "Executing skill calls", { 
+          agentId: nextAgentId,
+          skillCount: skillCalls.length 
+        });
         for (const skillCall of skillCalls) {
+          logger.debug("orchestrator", "Executing individual skill", { 
+            skillName: skillCall.name, 
+            skillParams: skillCall.params 
+          });
           try {
             const result = await skillsEngine.executeSkill(
               skillCall.name, 
@@ -247,33 +296,60 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
             );
             
             if (result.success) {
+              logger.info("orchestrator", "Skill execution succeeded", { 
+                skillName: skillCall.name, 
+                hasOutput: !!result.output 
+              });
               toolResult += `Skill ${skillCall.name} executed successfully.\n`;
               if (result.output) {
                 toolResult += `Output: ${result.output}\n`;
               }
             } else {
+              logger.error("orchestrator", "Skill execution failed", { 
+                skillName: skillCall.name, 
+                error: result.error 
+              });
               toolResult += `Skill ${skillCall.name} failed: ${result.error}\n`;
             }
           } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            logger.error("orchestrator", "Skill execution threw error", { 
+              skillName: skillCall.name, 
+              error: errorMessage 
+            });
             toolResult += `Error executing skill ${skillCall.name}: ${errorMessage}\n`;
           }
         }
+        logger.debug("orchestrator", "Adding skill execution result to chat history", { 
+          resultLength: toolResult.length 
+        });
         this.chatHistory.push({ role: "assistant", content: `[System Observation] Skill execution result: ${toolResult}` });
       }
       
       if (toolCall) {
+          logger.debug("orchestrator", "Processing tool call", { 
+            agentId: nextAgentId,
+            toolName: toolCall.name,
+            hasArgs: !!toolCall.args
+          });
+          
           if (toolCall.name === "delegate") {
               nextAgentId = toolCall.args.agent as string;
               nextAgentInstruction = toolCall.args.instruction as string;
+              logger.info("orchestrator", "Delegating to agent", { 
+                targetAgent: nextAgentId,
+                instructionLength: nextAgentInstruction.length
+              });
               toolResult = `Delegated to ${nextAgentId} with instructions: ${nextAgentInstruction}`;
           } else if (toolCall.name === "execute_python" && nextAgentId !== "reviewer") {
               // Intercept execute_python if it's not from a reviewer (usually coder)
               // Force delegation to Reviewer first
+              logger.debug("orchestrator", "Intercepting Python execution for reviewer approval");
               // Validate that this is a proper Python execution call
               if (toolCall.name === "execute_python" && typeof toolCall.args?.code === "string") {
                   // Check if we're already executing a pending tool to prevent reentrancy
                   if (this.isExecutingPendingTool) {
+                      logger.warn("orchestrator", "Python execution rejected - already executing pending tool");
                       toolResult = "Cannot execute Python code while another execution is in progress.";
                       this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
                   } else {
@@ -294,6 +370,10 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
       }
 
       // Always run Observer after any agent action or tool call
+      logger.debug("orchestrator", "Starting observer analysis", { 
+        lastAgent: persona.name,
+        toolResultLength: toolResult.length 
+      });
       const observer = PERSONAS["observer"];
       const observerPrompt = await getSystemContext(observer);
       const observerTask = `Analyze the last action by ${persona.name} and the tool result: ${toolResult}.
@@ -309,19 +389,30 @@ Provide a concise observation for the Manager.`;
         systemOverride: observerPrompt,
         signal
       });
+      logger.info("orchestrator", "Observer analysis completed", { 
+        observationLength: observation.length 
+      });
       this.chatHistory.push({ role: "assistant", content: `[Observer] ${observation}` });
 
       // Post-agent logic (Reviewer automation, etc.)
       // Always clear pending tool call when reviewer responds
       if (persona.id === "reviewer") {
+          logger.debug("orchestrator", "Processing reviewer response", { 
+              hasPendingTool: !!this.pendingToolCall,
+              isExecutingPendingTool: this.isExecutingPendingTool,
+              approved: agentContent.includes("APPROVED")
+          });
+          
           if (agentContent.includes("APPROVED") && this.pendingToolCall && !this.isExecutingPendingTool) {
               // If Reviewer approves, execute the pending tool call
+              logger.info("orchestrator", "Reviewer approved Python execution, executing pending tool");
               const currentPendingCall = this.pendingToolCall; // Capture before clearing
               this.pendingToolCall = null; // Clear immediately to prevent re-execution
               this.isExecutingPendingTool = true; // Set execution flag
               
               try {
                   toolResult = await this.executeTool(currentPendingCall.name, currentPendingCall.args, onUpdate);
+                  logger.info("orchestrator", "Pending tool execution completed successfully");
                   this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
                   // After execution, return to manager
                   nextAgentId = "manager";
@@ -335,6 +426,7 @@ Provide a concise observation for the Manager.`;
               }
           } else {
               // Not approved, send back to coder
+              logger.info("orchestrator", "Reviewer rejected code, sending back to coder");
               this.pendingToolCall = null; // Clear pending call
               this.isExecutingPendingTool = false; // Clear execution flag if set
               nextAgentId = "coder";
@@ -342,19 +434,33 @@ Provide a concise observation for the Manager.`;
           }
       } else if (nextAgentId === "coder" && !toolCall?.name?.includes("delegate") && !toolCall?.name?.includes("execute_python")) {
           // If coder just finished and didn't delegate yet, we might want to force Reviewer
+          logger.debug("orchestrator", "Auto-delegating coder work to reviewer");
           nextAgentId = "reviewer";
           nextAgentInstruction = "Review the work written by the Coder.";
       } else if (nextAgentId !== "manager" && !toolCall?.name) {
           // If an agent finished without tool call, return to manager
+          logger.debug("orchestrator", "Agent finished without tool call, returning to manager", { 
+            agentId: nextAgentId 
+          });
           nextAgentId = "manager";
       } else if (toolCall?.name === "delegate" || (toolCall?.name === "execute_python" && persona.id === "coder")) {
           // nextAgentId is already set above for delegation or intercepted execution
+          logger.debug("orchestrator", "Using pre-set next agent from tool call", { 
+            nextAgentId,
+            toolName: toolCall?.name
+          });
       } else {
           // Default back to manager to decide next step
+          logger.debug("orchestrator", "Defaulting to manager for next step");
           nextAgentId = "manager";
       }
     }
 
+    logger.info("orchestrator", "Task execution completed", { 
+      finalLoopCount: loopCount,
+      chatHistoryLength: this.chatHistory.length,
+      taskComplete
+    });
     return this.chatHistory;
   }
 

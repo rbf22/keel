@@ -20,7 +20,8 @@ vi.mock('./logger', () => ({
   logger: {
     info: vi.fn(),
     error: vi.fn(),
-    warn: vi.fn()
+    warn: vi.fn(),
+    debug: vi.fn()
   }
 }))
 
@@ -47,6 +48,15 @@ describe('AgentOrchestrator Abort Support', () => {
     }
     mockPython = {
       execute: vi.fn(),
+      executeWithTemporaryOutput: vi.fn().mockImplementation(async (handler, fn) => {
+        const oldHandler = mockPython.onOutput
+        mockPython.onOutput = handler
+        try {
+          return await fn()
+        } finally {
+          mockPython.onOutput = oldHandler
+        }
+      }),
       onOutput: null,
       restoreHandler: vi.fn()
     }
