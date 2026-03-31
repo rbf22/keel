@@ -537,7 +537,20 @@ initBtn.onclick = async () => {
     const enginePromise = engine.init();
 
     // Wait for core systems to be ready
-    await Promise.all([storagePromise, pythonPromise, enginePromise]);
+    try {
+      await Promise.all([storagePromise, pythonPromise, enginePromise]);
+    } catch (err: unknown) {
+      // If any of the core systems fail to initialize, clean up and re-throw
+      if (python) {
+        python.terminate();
+        python = null;
+      }
+      if (engine) {
+        void engine.unload();
+        engine = null;
+      }
+      throw err;
+    }
     
     logger.info('system', 'Core systems ready, initializing skills...');
     await SkillsDownloader.setLLMEngine(engine);

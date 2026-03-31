@@ -81,6 +81,7 @@ export interface ILLMEngine {
   init(): Promise<void>;
   generate(prompt: string, options: GenerateOptions): Promise<string>;
   getStats(): Promise<string | null>;
+  unload?(): Promise<void>;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are Keel, a local-first AI agent with access to Python execution and skills.
@@ -111,15 +112,25 @@ export class LocalLLMEngine implements ILLMEngine {
   }
 
   async init() {
-    this.onUpdate("Checking WebGPU...");
-    await checkWebGPU();
+    try {
+      this.onUpdate("Checking WebGPU...");
+      await checkWebGPU();
 
-    this.onUpdate("Initializing Engine...");
-    this.engine = await webllm.CreateMLCEngine(this.modelId, {
-      initProgressCallback: (report: webllm.InitProgressReport) => {
-        this.onUpdate(`Loading: ${report.text}`);
-      },
-    });
+      this.onUpdate("Initializing Engine...");
+      this.engine = await webllm.CreateMLCEngine(this.modelId, {
+        initProgressCallback: (report: webllm.InitProgressReport) => {
+          this.onUpdate(`Loading: ${report.text}`);
+        },
+      });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error("llm", `Failed to initialize local engine: ${errorMessage}`, { error: err });
+      
+      if (errorMessage.includes("Failed to fetch")) {
+        throw new Error("Failed to download model files. Please check your internet connection or try a different model.");
+      }
+      throw err;
+    }
   }
 
   async generate(prompt: string, options: GenerateOptions) {
@@ -192,6 +203,13 @@ export class LocalLLMEngine implements ILLMEngine {
   async getStats() {
     if (!this.engine) return null;
     return await this.engine.runtimeStatsText();
+  }
+
+  async unload() {
+    if (this.engine) {
+      await this.engine.unload();
+      this.engine = null;
+    }
   }
 }
 
@@ -347,6 +365,11 @@ export class HybridLLMEngine implements ILLMEngine {
       return await this.onlineEngine.getStats();
     }
     return await this.localEngine.getStats();
+  }
+
+  async unload() {
+    await this.localEngine.unload();
+    this.onlineEngine = null;
   }
 }
 

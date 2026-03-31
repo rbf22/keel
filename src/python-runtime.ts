@@ -69,19 +69,36 @@ export class PythonRuntime {
       this.worker.onmessage = (event) => {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         logger.info('python', `Worker output: ${output.type}`, output);
+        
         if (output.type === 'ready') {
           this.isReady = true;
           this.onOutput(output);
           resolve();
+        } else if (output.type === 'error' && !this.isReady) {
+          // If we haven't resolved yet and we get an error, reject the init promise
+          const errorMsg = output.message || 'Unknown initialization error';
+          logger.error('python', `Initialization failed: ${errorMsg}`);
+          
+          let userFriendlyError = errorMsg;
+          if (errorMsg.includes('Failed to fetch')) {
+            userFriendlyError = 'Failed to download Python runtime (Pyodide) or packages (pandas, numpy). Please check your internet connection.';
+          }
+          
+          this.terminate();
+          reject(new Error(userFriendlyError));
         } else {
           this.onOutput(output);
         }
       };
 
       this.worker.onerror = (error) => {
-        logger.error('python', 'Worker error occurred', { error });
-        this.onOutput({ type: 'error', message: 'Worker error occurred' });
-        reject(error);
+        logger.error('python', 'Worker error occurred during initialization', { error });
+        const errorMessage = 'Python worker failed to load. This might be due to a network error or browser restriction.';
+        this.onOutput({ type: 'error', message: errorMessage });
+        if (!this.isReady) {
+          this.terminate();
+          reject(new Error(errorMessage));
+        }
       };
     });
   }
