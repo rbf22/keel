@@ -6,10 +6,10 @@ export default defineConfig({
   plugins: [
     VitePWA({
       strategies: 'injectManifest',
-      srcDir: 'src',
+      srcDir: './',
       filename: 'sw.ts',
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      injectRegister: false,
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
         name: 'Keel - PadAgent Core',
@@ -40,6 +40,11 @@ export default defineConfig({
       },
       workbox: {
         maximumFileSizeToCacheInBytes: 100 * 1024 * 1024,
+      },
+      devOptions: {
+        enabled: true,
+        type: 'module',
+        navigateFallback: 'index.html'
       }
     })
   ],

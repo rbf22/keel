@@ -1,0 +1,182 @@
+
+> keel@0.1.0 test
+> vitest --run
+
+
+ RUN  v2.1.9 /Users/robert_fenwick/SWE/keel/keel
+
+ ✓ src/storage.test.ts (10 tests) 24ms
+ ✓ src/skills/level3.integration.test.ts (4 tests) 5ms
+ ✓ src/storage/skills.test.ts (9 tests) 33ms
+ ✓ src/orchestrator.cycle-detection.test.ts (11 tests) 11ms
+ ❯ src/utils/secure-web-fetcher.sanitization.test.ts (16 tests | 1 failed) 30ms
+   × SecureWebFetcher - HTML Sanitization > sanitizeContent > should fallback to regex when DOMParser fails 4ms
+     → expected "warn" to be called with arguments: [ …(2) ]
+
+Received: 
+
+
+
+Number of calls: 0
+
+ ❯ src/storage/skills.transaction-safety.test.ts (9 tests | 1 failed) 162ms
+   × SkillStorage - Transaction Safety > should handle rollback errors gracefully 5ms
+     → expected "error" to be called with arguments: [ …(2) ]
+
+Received: 
+
+
+
+Number of calls: 0
+
+ ❯ src/python-runtime.resource-cleanup.test.ts (9 tests | 2 failed) 175ms
+   × PythonRuntime - Resource Cleanup > should terminate worker and clean up on timeout 58ms
+     → expected [Function] to throw error including 'Execution timed out' but got 'Execution timeout'
+   × PythonRuntime - Resource Cleanup > should prevent multiple timeout cleanups 106ms
+     → expected Error: Execution timeout to match object { message: 'Execution timed out' }
+ ✓ src/skills/downloader.test.ts (15 tests) 28ms
+ ❯ src/llm.abort.test.ts (0 test)
+ ✓ src/skills/parser.yaml-edge-cases.test.ts (15 tests) 7ms
+ ✓ src/skills/engine.test.ts (9 tests) 4ms
+ ✓ src/integration.test.ts (4 tests) 9ms
+ ✓ src/logger.memory-limits.test.ts (9 tests) 291ms
+ ✓ src/orchestrator.test.ts (6 tests) 12ms
+ ✓ src/storage/models.test.ts (6 tests) 46ms
+ ✓ src/orchestrator.loop.test.ts (3 tests) 16ms
+ ✓ src/skills/parser.test.ts (9 tests) 19ms
+ ✓ src/orchestrator.abort.test.ts (3 tests) 20ms
+ ❯ src/python-runtime.concurrency.test.ts (3 tests | 1 failed) 260ms
+   × PythonRuntime Concurrency > should correctly manage timeouts for overlapping calls 63ms
+     → expected [ 'Execution timeout', …(1) ] to include 'Execution timed out'
+(node:68783) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/llm.init.test.ts (2 tests) 17ms
+ ✓ src/utils/secure-web-fetcher.extract-content.test.ts (8 tests) 4ms
+ ✓ src/skills/parser.validation.test.ts (7 tests) 4ms
+ ✓ src/skills/parser.llm-conversion.test.ts (5 tests) 6ms
+ ✓ src/python-runtime.test.ts (4 tests) 5ms
+(node:68796) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/llm.config.test.ts (6 tests) 8ms
+(node:68798) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/llm.diagnostic.test.ts (5 tests) 3ms
+ ✓ src/tools.test.ts (5 tests) 2ms
+ ✓ src/skills/llm-converter.test.ts (6 tests) 2027ms
+   ✓ LLMConverter > should handle conversion failures with retry 1012ms
+   ✓ LLMConverter > should throw error after max retries 1002ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/llm.abort.test.ts [ src/llm.abort.test.ts ]
+Error: [vitest] There was an error when mocking a module. If you are using "vi.mock" factory, make sure there are no top level variables inside, since this call is hoisted to top of the file. Read more: https://vitest.dev/api/vi.html#vi-mock
+ ❯ src/llm.abort.test.ts:19:25
+     18| }))
+     19| 
+     20| describe('LLM Abort Support', () => {
+       |                        ^
+     21|   describe('LocalLLMEngine', () => {
+     22|     let engine: LocalLLMEngine
+
+Caused by: Error: [vitest] No "modelLibURLPrefix" export is defined on the "@mlc-ai/web-llm" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+vi.mock(import("@mlc-ai/web-llm"), async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    // your mocked methods
+  }
+})
+
+ ❯ src/llm.ts:88:23
+ ❯ src/llm.abort.test.ts:13:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/python-runtime.concurrency.test.ts > PythonRuntime Concurrency > should correctly manage timeouts for overlapping calls
+AssertionError: expected [ 'Execution timeout', …(1) ] to include 'Execution timed out'
+ ❯ src/python-runtime.concurrency.test.ts:105:21
+    103|     
+    104|     // If one times out, the worker is terminated, so both should like…
+    105|     expect(results).toContain('Execution timed out');
+       |                     ^
+    106|   });
+    107| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  src/python-runtime.resource-cleanup.test.ts > PythonRuntime - Resource Cleanup > should terminate worker and clean up on timeout
+AssertionError: expected [Function] to throw error including 'Execution timed out' but got 'Execution timeout'
+
+Expected: "Execution timed out"
+Received: "Execution timeout"
+
+ ❯ src/python-runtime.resource-cleanup.test.ts:178:5
+    176|     worker.postMessage = vi.fn();
+    177|     
+    178|     await expect(runtime.execute('infinite loop()')).rejects.toThrow('…
+       |     ^
+    179|     
+    180|     // Worker should be terminated
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  src/python-runtime.resource-cleanup.test.ts > PythonRuntime - Resource Cleanup > should prevent multiple timeout cleanups
+AssertionError: expected Error: Execution timeout to match object { message: 'Execution timed out' }
+
+- Expected
++ Received
+
+- Object {
+-   "message": "Execution timed out",
+- }
++ [Error: Execution timeout]
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  src/storage/skills.transaction-safety.test.ts > SkillStorage - Transaction Safety > should handle rollback errors gracefully
+AssertionError: expected "error" to be called with arguments: [ …(2) ]
+
+Received: 
+
+
+
+Number of calls: 0
+
+ ❯ src/storage/skills.transaction-safety.test.ts:147:24
+    145|     
+    146|     // Should log rollback error
+    147|     expect(consoleSpy).toHaveBeenCalledWith('Failed to rollback skill …
+       |                        ^
+    148|   });
+    149| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  src/utils/secure-web-fetcher.sanitization.test.ts > SecureWebFetcher - HTML Sanitization > sanitizeContent > should fallback to regex when DOMParser fails
+AssertionError: expected "warn" to be called with arguments: [ …(2) ]
+
+Received: 
+
+
+
+Number of calls: 0
+
+ ❯ src/utils/secure-web-fetcher.sanitization.test.ts:173:26
+    171|       const sanitized = SecureWebFetcher.sanitizeContent(content);
+    172|       
+    173|       expect(consoleSpy).toHaveBeenCalledWith('DOMParser sanitization …
+       |                          ^
+    174|       expect(sanitized).not.toContain('<script>');
+    175|       expect(sanitized).toContain('<p>Safe content</p>');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+ Test Files  5 failed | 23 passed (28)
+      Tests  5 failed | 193 passed (198)
+   Start at  15:48:15
+   Duration  6.15s (transform 623ms, setup 1.26s, collect 1.86s, tests 3.23s, environment 18.60s, prepare 2.36s)
+

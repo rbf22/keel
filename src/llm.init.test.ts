@@ -7,12 +7,11 @@ import * as llmModule from './llm'
 // Mock web-llm
 vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
   const actual = await importOriginal() as any;
-  const mockServiceWorkerMLCEngine = vi.fn().mockImplementation(() => ({
-    reload: vi.fn(),
-  }));
+  const mockCreateServiceWorkerMLCEngine = vi.fn();
   return {
     ...actual,
-    ServiceWorkerMLCEngine: mockServiceWorkerMLCEngine,
+    CreateServiceWorkerMLCEngine: mockCreateServiceWorkerMLCEngine,
+    ServiceWorkerMLCEngine: vi.fn(), // Keep for backward compatibility
     prebuiltAppConfig: actual.prebuiltAppConfig || { model_list: [] },
   };
 })
@@ -48,45 +47,39 @@ describe('LocalLLMEngine Initialization Diagnostics', () => {
     vi.stubGlobal('navigator', { gpu: mockGpu })
   })
 
-  it('should include modelId in error message when reload fails', async () => {
+  it('should include modelId in error message when CreateServiceWorkerMLCEngine fails', async () => {
     const fetchError = new Error('Failed to fetch')
-    const mockReload = vi.fn().mockRejectedValue(fetchError)
-    ;(webllm.ServiceWorkerMLCEngine as any).mockImplementation(() => ({
-      reload: mockReload,
-    }))
+    ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(fetchError)
 
-    await expect(engine.init()).rejects.toThrow(`Failed to download model files for ${modelId}`)
+    await expect(engine.init()).rejects.toThrow(`Failed to initialize ServiceWorkerMLCEngine: Failed to fetch`)
     
-    expect(webllm.ServiceWorkerMLCEngine).toHaveBeenCalledWith(
+    expect(webllm.CreateServiceWorkerMLCEngine).toHaveBeenCalledWith(
+      modelId,
       expect.objectContaining({
         appConfig: expect.objectContaining({
           model_list: expect.any(Array)
-        })
-      }),
-      expect.any(Number)
+        }),
+        initProgressCallback: expect.any(Function)
+      })
     )
-    expect(mockReload).toHaveBeenCalledWith(modelId, expect.any(Object))
 
     expect(logger.error).toHaveBeenCalledWith(
       'llm',
-      expect.stringContaining(`Failed to initialize local engine (${modelId}): Failed to download model files for ${modelId}`),
-      expect.any(Object)
+      'ServiceWorkerMLCEngine initialization failed',
+      expect.objectContaining({ error: fetchError })
     )
   })
 
   it('should report specific error message for non-fetch errors', async () => {
     const otherError = new Error('GPU out of memory')
-    const mockReload = vi.fn().mockRejectedValue(otherError)
-    ;(webllm.ServiceWorkerMLCEngine as any).mockImplementation(() => ({
-      reload: mockReload,
-    }))
+    ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(otherError)
 
-    await expect(engine.init()).rejects.toThrow('GPU out of memory')
+    await expect(engine.init()).rejects.toThrow(`Failed to initialize ServiceWorkerMLCEngine: GPU out of memory`)
     
     expect(logger.error).toHaveBeenCalledWith(
       'llm',
-      expect.stringContaining(`Failed to initialize local engine (${modelId}): GPU out of memory`),
-      expect.any(Object)
+      'ServiceWorkerMLCEngine initialization failed',
+      expect.objectContaining({ error: otherError })
     )
   })
 })

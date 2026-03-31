@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Service Worker Test</title>
+</head>
+<body>
+    <h1>Service Worker Test</h1>
+    <button id="testBtn">Test Service Worker</button>
+    <div id="status"></div>
+    
+    <script type="module">
+        // Test if we can import the llm module
+        import { LocalLLMEngine } from './src/llm.ts';
+        
+        document.getElementById('testBtn').onclick = async () => {
+            const status = document.getElementById('status');
+            status.textContent = 'Testing...';
+            
+            try {
+                const engine = new LocalLLMEngine('SmolLM2-360M-Instruct-q4f16_1-MLC', (msg) => {
+                    status.textContent = msg;
+                });
+                
+                await engine.init();
+                status.textContent = 'SUCCESS!';
+            } catch (error) {
+                status.textContent = `ERROR: ${error.message}`;
+                console.error(error);
+            }
+        };
+    </script>
+</body>
+</html>

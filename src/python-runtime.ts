@@ -197,7 +197,7 @@ export class PythonRuntime {
           // Send error output
           this.onOutput({ type: 'error', message: 'Execution timed out. Worker terminated.' });
           // Reject the promise
-          reject(new Error('Execution timeout'));
+          reject(new Error('Execution timed out'));
         }
       }, this.executionTimeout);
     });

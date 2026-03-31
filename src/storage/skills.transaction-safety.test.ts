@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SkillStorage, type StoredSkill } from './skills';
+import { logger } from '../logger';
 
 describe('SkillStorage - Transaction Safety', () => {
   let storage: SkillStorage;
-  let consoleSpy: any;
 
   beforeEach(() => {
     storage = new SkillStorage();
-    consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {
-    consoleSpy.mockRestore();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   const createMockSkill = (name: string): StoredSkill => ({
@@ -144,7 +144,7 @@ describe('SkillStorage - Transaction Safety', () => {
     expect(storage.deleteSkill).toHaveBeenCalledWith('skill1');
     
     // Should log rollback error
-    expect(consoleSpy).toHaveBeenCalledWith('Failed to rollback skill skill1:', expect.any(Error));
+    expect(logger.error).toHaveBeenCalledWith('skills', `Failed to rollback skill skill1`, expect.any(Object));
   });
 
   it('should preserve skill data during successful import', async () => {

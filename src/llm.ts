@@ -1,5 +1,6 @@
-import * as webllm from "@mlc-ai/web-llm"
+import * as webllm from "@mlc-ai/web-llm";
 import { logger } from "./logger"
+import { MODEL_VRAM_THRESHOLDS, LLM_GENERATION_DELAY } from "./constants"
 
 export async function checkWebGPU() {
   if (!(navigator as unknown as { gpu?: GPU }).gpu) {
@@ -28,10 +29,8 @@ export async function detectBestModel(): Promise<string> {
     // but not always the whole picture. 
     const maxBufferMB = limits.maxStorageBufferBindingSize / (1024 * 1024);
 
-    // Sort models by VRAM requirement (descending) to find the best fit
-    const candidates = [...CUSTOM_MODEL_LIST].sort((a, b) => 
-      (b.vram_required_MB || 0) - (a.vram_required_MB || 0)
-    );
+    // Get cached sorted models by VRAM requirement (descending) to find the best fit
+    const candidates = getSortedModelList();
 
     for (const model of candidates) {
       // Check feature requirements
@@ -46,16 +45,16 @@ export async function detectBestModel(): Promise<string> {
       
       // Heuristic: If we have 8GB+ system RAM, we can likely handle Llama 3B (2.2GB VRAM)
       // if the GPU adapter limits allow large enough buffers.
-      if (memory && memory >= 8 && vramLimit > 2000) {
-        if (maxBufferMB >= 1024) return model.model_id;
+      if (memory && memory >= MODEL_VRAM_THRESHOLDS.HIGH_MEMORY_THRESHOLD && vramLimit > MODEL_VRAM_THRESHOLDS.MEDIUM_MODEL) {
+        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.HIGH_BUFFER_SIZE) return model.model_id;
       }
       
-      if (memory && memory >= 4 && vramLimit > 800) {
-        if (maxBufferMB >= 512) return model.model_id;
+      if (memory && memory >= MODEL_VRAM_THRESHOLDS.MEDIUM_MEMORY_THRESHOLD && vramLimit > MODEL_VRAM_THRESHOLDS.SMALL_MODEL) {
+        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.MEDIUM_BUFFER_SIZE) return model.model_id;
       }
 
       // If it's a very small model (like SmolLM 360M), just check shader support
-      if (vramLimit < 800) {
+      if (vramLimit < MODEL_VRAM_THRESHOLDS.SMALL_MODEL) {
         return model.model_id;
       }
     }
@@ -163,7 +162,7 @@ export const CUSTOM_APP_CONFIG: webllm.AppConfig = {
     ...webllm.prebuiltAppConfig.model_list.filter(m => !CUSTOM_MODEL_LIST.some(cm => cm.model_id === m.model_id)),
     ...CUSTOM_MODEL_LIST
   ],
-  useIndexedDBCache: true,
+  useIndexedDBCache: true,  // Re-enabled - bug fixed with patch
 };
 
 // Map web-llm prebuilt models to our ModelInfo format
@@ -176,6 +175,18 @@ export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_MODEL_LIST.map(m => ({
 }));
 
 export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+
+// Cache sorted model list for performance
+let sortedModelList: typeof CUSTOM_MODEL_LIST | null = null;
+
+function getSortedModelList(): typeof CUSTOM_MODEL_LIST {
+  if (!sortedModelList) {
+    sortedModelList = [...CUSTOM_MODEL_LIST].sort((a, b) => 
+      (b.vram_required_MB || 0) - (a.vram_required_MB || 0)
+    );
+  }
+  return sortedModelList;
+}
 
 export interface GenerateOptions {
   onToken: (text: string) => void;
@@ -230,8 +241,6 @@ export function mapError(err: unknown, modelId: string): string {
   return errorMessage;
 }
 
-const KEEP_ALIVE_INTERVAL = 5000;
-
 export class LocalLLMEngine implements ILLMEngine {
   private engine: webllm.ServiceWorkerMLCEngine | null = null;
   private onUpdate: (message: string) => void;
@@ -241,48 +250,48 @@ export class LocalLLMEngine implements ILLMEngine {
   constructor(modelId: string, onUpdate: (message: string) => void) {
     this.modelId = modelId;
     this.onUpdate = onUpdate;
+    logger.info("llm", `LocalLLMEngine initialized with Service Worker`);
   }
 
   async init() {
+    this.onUpdate("Checking WebGPU...");
+    await checkWebGPU();
+
+    const engineConfig: webllm.MLCEngineConfig = {
+      appConfig: CUSTOM_APP_CONFIG,
+      initProgressCallback: (report: webllm.InitProgressReport) => {
+        this.onUpdate(`Loading: ${report.text}`);
+        logger.info("llm", `Init progress: ${report.text}`, { progress: report.progress });
+      },
+    };
+
+    // Initialize ServiceWorkerMLCEngine
+    this.onUpdate("Initializing Service Worker Engine...");
+    
     try {
-      this.onUpdate("Checking WebGPU...");
-      await checkWebGPU();
-
-      this.onUpdate("Initializing Service Worker Engine...");
+      // Create the engine using CreateServiceWorkerMLCEngine
+      this.engine = await webllm.CreateServiceWorkerMLCEngine(
+        this.modelId,
+        engineConfig
+      );
       
-      const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
-      
-      // Use ServiceWorkerMLCEngine for better background persistence
-      const engine = new webllm.ServiceWorkerMLCEngine({
-        appConfig: CUSTOM_APP_CONFIG,
-        initProgressCallback: (report: webllm.InitProgressReport) => {
-          this.onUpdate(`Loading: ${report.text}`);
-          logger.info("llm", `Init progress: ${report.text}`, { progress: report.progress });
-        },
-      }, KEEP_ALIVE_INTERVAL);
-
-      this.onUpdate(`Reloading model: ${this.modelId}...`);
-      
-      // Pass the recommended config if available
-      const reloadOptions = config?.recommended_config ? {
-        ...config.recommended_config
-      } : {};
-
-      await engine.reload(this.modelId, reloadOptions);
-      this.engine = engine;
-      
-      logger.info("llm", `Local engine (Service Worker) initialized successfully: ${this.modelId}`);
-    } catch (err: unknown) {
-      const errorMessage = mapError(err, this.modelId);
-      const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
-      
-      let diagnosticInfo = `Failed to initialize local engine (${this.modelId}): ${errorMessage}`;
-      if (config) {
-        diagnosticInfo += `\nAttempted Weights: ${config.model}\nAttempted WASM: ${config.model_lib}`;
+      logger.info("llm", `ServiceWorkerMLCEngine initialized successfully: ${this.modelId}`);
+    } catch (error) {
+      // Clean up on error
+      if (this.engine) {
+        try {
+          await this.engine.unload();
+        } catch (unloadError) {
+          logger.warn("llm", "Error during cleanup", { error: unloadError });
+        }
+        this.engine = null;
       }
       
-      logger.error("llm", diagnosticInfo, { error: err });
-      throw new Error(errorMessage);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error("llm", "ServiceWorkerMLCEngine initialization failed", { error });
+      
+      // Re-throw with more context
+      throw new Error(`Failed to initialize ServiceWorkerMLCEngine: ${errorMessage}`);
     }
   }
 
@@ -300,7 +309,7 @@ export class LocalLLMEngine implements ILLMEngine {
     this.isGenerating = true;
 
     // Small delay to ensure WebLLM worker state is settled
-    await new Promise(resolve => setTimeout(resolve, 250));
+    await new Promise(resolve => setTimeout(resolve, LLM_GENERATION_DELAY));
 
     const { onToken, history = [], systemOverride, signal } = options;
     const systemPrompt = systemOverride || DEFAULT_SYSTEM_PROMPT;

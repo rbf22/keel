@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SecureWebFetcher } from './secure-web-fetcher';
+import { logger } from '../logger';
 
 // Mock fetch
 Object.defineProperty(globalThis, 'fetch', {
@@ -158,7 +159,7 @@ describe('SecureWebFetcher - HTML Sanitization', () => {
     });
 
     it('should fallback to regex when DOMParser fails', () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
       
       // Mock DOMParser to throw error
       Object.defineProperty(globalThis, 'DOMParser', { 
@@ -170,11 +171,9 @@ describe('SecureWebFetcher - HTML Sanitization', () => {
       const content = '<script>alert("xss")</script><p>Safe content</p>';
       const sanitized = SecureWebFetcher.sanitizeContent(content);
       
-      expect(consoleSpy).toHaveBeenCalledWith('DOMParser sanitization failed, using regex fallback:', expect.any(Error));
+      expect(logger.warn).toHaveBeenCalledWith('secure-fetch', 'DOMParser sanitization failed, using regex fallback', expect.any(Object));
       expect(sanitized).not.toContain('<script>');
       expect(sanitized).toContain('<p>Safe content</p>');
-      
-      consoleSpy.mockRestore();
     });
 
     it('should handle case variations in dangerous patterns', () => {

@@ -11,6 +11,14 @@ import { SkillsDownloader } from './skills/downloader'
 import { skillStorage } from './storage/skills'
 import { modelStorage } from './storage/models'
 import { IndexedDBWrapper } from './storage/indexeddb-wrapper'
+import { 
+  SW_ACTIVATION_TIMEOUT, 
+  SW_CONTROLLER_CLAIM_TIMEOUT, 
+  PYTHON_CLEANUP_DELAY, 
+  VFS_PAGE_SIZE, 
+  LOG_MAX_ENTRIES, 
+  UI_BUTTON_RESET_DELAY 
+} from './constants'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -241,17 +249,29 @@ function setTaskRunning(running: boolean) {
   }
 }
 
-stopBtn.onclick = () => {
+stopBtn.onclick = async () => {
   if (currentAbortController) {
     currentAbortController.abort();
     currentAbortController = null;
   }
   
   if (python) {
-    python.terminate();
-    // Re-initialize python since it was terminated
-    python = new PythonRuntime(handlePythonOutput);
-    void python.init();
+    try {
+      python.terminate();
+      logger.info('system', 'Python runtime terminated');
+      
+      // Wait a moment for cleanup to complete
+      await new Promise(resolve => setTimeout(resolve, PYTHON_CLEANUP_DELAY));
+      
+      // Re-initialize python since it was terminated
+      python = new PythonRuntime(handlePythonOutput);
+      await python.init();
+      logger.info('system', 'Python runtime reinitialized successfully');
+    } catch (err) {
+      logger.error('system', 'Failed to reinitialize Python runtime', { error: err });
+      // Don't leave python in a bad state
+      python = null;
+    }
   }
   setTaskRunning(false);
   addMessage("Task stopped by user.", "system");
@@ -297,8 +317,8 @@ logger.subscribe((entry: LogEntry) => {
   debugLogsEl.appendChild(logDiv);
   
   // Limit DOM elements to prevent performance degradation (keep last 200)
-  if (debugLogsEl.children.length > 200) {
-    const toRemove = debugLogsEl.children.length - 200;
+  if (debugLogsEl.children.length > LOG_MAX_ENTRIES) {
+    const toRemove = debugLogsEl.children.length - LOG_MAX_ENTRIES;
     for (let i = 0; i < toRemove; i++) {
       debugLogsEl.removeChild(debugLogsEl.children[0]);
     }
@@ -343,33 +363,105 @@ async function refreshVFSDisplay() {
             return;
         }
 
-        // Process files in parallel with proper ordering and error handling
-        const results = await IndexedDBWrapper.getMultipleFiles(storageWithDb.db, files);
+        // Pagination settings
+        const PAGE_SIZE = VFS_PAGE_SIZE;
+        let currentPage = 1;
+        const totalPages = Math.ceil(files.length / PAGE_SIZE);
+
+        // Create pagination controls
+        const paginationDiv = document.createElement('div');
+        paginationDiv.className = 'vfs-pagination';
+        paginationDiv.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding: 0.5rem; border-bottom: 1px solid #333;';
+
+        const pageInfo = document.createElement('span');
+        pageInfo.style.cssText = 'color: #888; font-size: 0.9rem;';
         
-        // Display files in original order
-        results.forEach(({ path, file }) => {
-            if (file) {
-                const itemDiv = document.createElement('div');
-                itemDiv.className = 'vfs-item';
-                itemDiv.innerHTML = `
-                    <div class="vfs-path">${file.path}</div>
-                    <div class="vfs-meta">Type: ${file.mimeType} | Updated: ${new Date(file.updatedAt).toLocaleString()}</div>
-                    <div class="vfs-content">${file.content.substring(0, 500)}${file.content.length > 500 ? '...' : ''}</div>
-                `;
-                vfsContainer.appendChild(itemDiv);
-            } else {
-                // Show files that couldn't be loaded
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'vfs-item';
-                errorDiv.innerHTML = `
-                    <div class="vfs-path" style="color: #ff453a;">${path}</div>
-                    <div class="vfs-meta" style="color: #ff453a;">Error: Could not load file details</div>
-                `;
-                vfsContainer.appendChild(errorDiv);
+        const controlsDiv = document.createElement('div');
+        controlsDiv.style.cssText = 'display: flex; gap: 0.5rem;';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.textContent = '← Previous';
+        prevBtn.style.cssText = 'padding: 0.25rem 0.5rem; background: #333; color: white; border: none; border-radius: 4px; cursor: pointer;';
+        prevBtn.disabled = true;
+
+        const nextBtn = document.createElement('button');
+        nextBtn.textContent = 'Next →';
+        nextBtn.style.cssText = 'padding: 0.25rem 0.5rem; background: #333; color: white; border: none; border-radius: 4px; cursor: pointer;';
+        if (totalPages <= 1) nextBtn.disabled = true;
+
+        controlsDiv.appendChild(prevBtn);
+        controlsDiv.appendChild(nextBtn);
+        paginationDiv.appendChild(pageInfo);
+        paginationDiv.appendChild(controlsDiv);
+        vfsContainer.appendChild(paginationDiv);
+
+        // Create content container
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'vfs-content';
+        vfsContainer.appendChild(contentDiv);
+
+        // Function to display a specific page
+        const displayPage = async (page: number) => {
+            const startIndex = (page - 1) * PAGE_SIZE;
+            const endIndex = startIndex + PAGE_SIZE;
+            const pageFiles = files.slice(startIndex, endIndex);
+            
+            contentDiv.textContent = '';
+            
+            // Process files for this page in parallel
+            const results = await IndexedDBWrapper.getMultipleFiles(storageWithDb.db!, pageFiles);
+            
+            // Display files in original order
+            results.forEach(({ path, file }) => {
+                if (file) {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'vfs-item';
+                    itemDiv.style.cssText = 'margin-bottom: 1rem; padding: 0.5rem; border: 1px solid #333; border-radius: 4px;';
+                    itemDiv.innerHTML = `
+                        <div class="vfs-path" style="font-weight: bold; color: #007AFF;">${file.path}</div>
+                        <div class="vfs-meta" style="color: #888; font-size: 0.8rem; margin-top: 0.25rem;">Type: ${file.mimeType} | Updated: ${new Date(file.updatedAt).toLocaleString()}</div>
+                        <div class="vfs-content" style="margin-top: 0.5rem; color: #ccc; font-size: 0.9rem;">${file.content.substring(0, 500)}${file.content.length > 500 ? '...' : ''}</div>
+                    `;
+                    contentDiv.appendChild(itemDiv);
+                } else {
+                    // Show files that couldn't be loaded
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'vfs-item';
+                    errorDiv.style.cssText = 'margin-bottom: 1rem; padding: 0.5rem; border: 1px solid #ff453a; border-radius: 4px;';
+                    errorDiv.innerHTML = `
+                        <div class="vfs-path" style="font-weight: bold; color: #ff453a;">${path}</div>
+                        <div class="vfs-meta" style="color: #ff453a; font-size: 0.8rem; margin-top: 0.25rem;">Error: Could not load file details</div>
+                    `;
+                    contentDiv.appendChild(errorDiv);
+                }
+            });
+
+            // Update pagination controls
+            pageInfo.textContent = `Page ${page} of ${totalPages} (${files.length} files total)`;
+            prevBtn.disabled = page === 1;
+            nextBtn.disabled = page === totalPages;
+            
+            logger.info('vfs', `Displayed page ${page} of ${totalPages} (${results.filter(r => r.file).length}/${pageFiles.length} files loaded)`);
+        };
+
+        // Add event listeners for pagination
+        prevBtn.onclick = () => {
+            if (currentPage > 1) {
+                currentPage--;
+                void displayPage(currentPage);
             }
-        });
+        };
+
+        nextBtn.onclick = () => {
+            if (currentPage < totalPages) {
+                currentPage++;
+                void displayPage(currentPage);
+            }
+        };
+
+        // Display first page
+        await displayPage(1);
         
-        logger.info('vfs', `Successfully displayed ${results.filter(r => r.file).length}/${files.length} files`);
     } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         logger.error('vfs', 'Failed to refresh VFS display', { error: err });
@@ -398,7 +490,7 @@ copyLogsBtn.onclick = async () => {
     copyLogsBtn.textContent = 'Copied!';
     setTimeout(() => {
       copyLogsBtn.textContent = originalText;
-    }, 2000);
+    }, UI_BUTTON_RESET_DELAY);
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     logger.error('main', 'Failed to copy logs', { error: err });
@@ -439,7 +531,7 @@ saveSettingsBtn.onclick = () => {
   saveSettingsBtn.textContent = 'Saved!';
   setTimeout(() => {
     saveSettingsBtn.textContent = originalText;
-  }, 2000);
+  }, UI_BUTTON_RESET_DELAY);
 };
 
 function addMessage(text: string, role: 'user' | 'assistant' | 'system') {
@@ -513,8 +605,102 @@ initBtn.onclick = async () => {
   try {
     logger.info('system', `Initializing storage, python, and engine...`);
     
-    // Start all major initializations in parallel
+    // Start all major initializations
     const storagePromise = storage.init();
+    
+    // Explicitly register and wait for service worker BEFORE engine initialization
+    // Web-LLM's ServiceWorkerMLCEngine requires an active service worker to exist
+    if ('serviceWorker' in navigator) {
+      console.log('Checking service worker support...');
+      try {
+        // Use a more robust path resolution that accounts for Vite's base path
+        const baseUrl = (import.meta as any).env.BASE_URL || '/';
+        const swPath = `${baseUrl}sw.js`;
+          
+        console.log(`Registering Service Worker from: ${swPath}`);
+        logger.info('system', `Registering Service Worker from: ${swPath}`);
+        
+        const registration = await navigator.serviceWorker.register(swPath, { 
+          type: 'module',
+          scope: baseUrl 
+        });
+        logger.info('system', 'Service Worker registered successfully', { scope: registration.scope });
+        
+        // Wait for the service worker to be active
+        let worker = registration.installing || registration.waiting || registration.active;
+        
+        logger.info('system', `Service Worker - installing: ${!!registration.installing}, waiting: ${!!registration.waiting}, active: ${!!registration.active}`);
+        
+        if (worker) {
+          logger.info('system', 'Service Worker state:', { state: worker.state });
+          if (worker.state !== 'activated') {
+            await new Promise<void>((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                logger.error('system', 'Service Worker activation timed out (30s)');
+                reject(new Error('Service Worker activation timed out (30s)'));
+              }, SW_ACTIVATION_TIMEOUT);
+
+              const stateChangeHandler = (e: Event) => {
+                const target = e.target as ServiceWorker;
+                logger.info('system', `Service Worker state changed: ${target.state}`);
+                if (target.state === 'activated') {
+                  clearTimeout(timeout);
+                  worker?.removeEventListener('statechange', stateChangeHandler);
+                  resolve();
+                } else if (target.state === 'redundant') {
+                  clearTimeout(timeout);
+                  worker?.removeEventListener('statechange', stateChangeHandler);
+                  logger.error('system', 'Service Worker became redundant');
+                  reject(new Error('Service Worker became redundant'));
+                }
+              };
+              worker?.addEventListener('statechange', stateChangeHandler);
+            });
+          }
+        } else {
+          logger.error('system', 'No service worker found after registration');
+        }
+        
+        // Ensure the service worker is controlling the page
+        if (!navigator.serviceWorker.controller) {
+          logger.info('system', 'Waiting for Service Worker controller claim...');
+          let controllerClaimed = false;
+          
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(() => {
+              if (!controllerClaimed) {
+                logger.warn('system', 'Service Worker controller claim timed out after 5 seconds');
+                // Don't reject - proceed without controller and let LocalLLMEngine handle fallback
+                resolve();
+              }
+            }, SW_CONTROLLER_CLAIM_TIMEOUT);
+
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+              controllerClaimed = true;
+              clearTimeout(timeout);
+              logger.info('system', 'Service Worker controller claimed');
+              resolve();
+            }, { once: true });
+          });
+
+          // Verify controller status after the wait
+          if (navigator.serviceWorker.controller) {
+            logger.info('system', 'Service Worker is active and controlling the page');
+          } else {
+            logger.warn('system', 'Service Worker failed to claim controller - LocalLLMEngine will use WebWorker fallback');
+          }
+        } else {
+          logger.info('system', 'Service Worker is active and controlling the page');
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Service Worker registration failed:', errorMsg);
+        logger.warn('system', `Service Worker registration/activation failed: ${errorMsg}. Falling back to WebWorker for LLM.`, { error: err });
+        // Don't throw, let LocalLLMEngine handle the fallback to WebWorker
+      }
+    } else {
+      logger.warn('system', 'Service Workers are not supported in this browser. Falling back to WebWorker for LLM.');
+    }
     
     python = new PythonRuntime(handlePythonOutput);
     const pythonPromise = python.init();

@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/keel/dev-sw.js?dev-sw', { scope: '/keel/', type: 'module' })

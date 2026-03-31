@@ -4,9 +4,23 @@ import * as webllm from "@mlc-ai/web-llm"
 import { logger } from "./logger"
 
 // Mock web-llm
-vi.mock("@mlc-ai/web-llm", () => ({
-  CreateMLCEngine: vi.fn(),
-}))
+vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
+  const actual = await importOriginal() as any;
+  return {
+    ...actual,
+    ServiceWorkerMLCEngine: vi.fn().mockImplementation(() => ({
+      chat: {
+        completions: {
+          create: vi.fn()
+        }
+      },
+      runtimeStatsText: vi.fn().mockResolvedValue('stats'),
+      reload: vi.fn().mockResolvedValue(undefined),
+      unload: vi.fn().mockResolvedValue(undefined)
+    })),
+    CreateMLCEngine: vi.fn(),
+  };
+})
 
 // Mock logger
 vi.mock("./logger", () => ({
