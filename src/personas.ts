@@ -21,11 +21,6 @@ export const SKILLS: Record<string, Skill> = {
     instructions: "Use pandas and numpy to analyze data. Use display_table(df) or display_chart(spec) for output. Always log(message) important steps.",
     pythonTools: ["pandas", "numpy", "matplotlib", "seaborn"]
   },
-  "reveal_js": {
-    id: "reveal_js",
-    name: "Reveal.js Presentation",
-    instructions: "Generate high-quality Reveal.js HTML/Markdown content. Use a clear <div> structure for slides.",
-  },
   "research": {
     id: "research",
     name: "Deep Research",
@@ -97,15 +92,6 @@ You can use CALL: execute_python directly.
 Always use log() in your code to show progress.
 Read/Write files with CALL: vfs_read/vfs_write if needed.`,
     skills: ["python_coding", "data_analysis"]
-  },
-  "slide_writer": {
-    id: "slide_writer",
-    name: "Slide Writer",
-    role: "Presentation Expert",
-    description: "Creates Reveal.js slides.",
-    basePrompt: `You are the Slide Writer. Transform info into Reveal.js <div> structures.
-Use high-impact visuals and minimal text.`,
-    skills: ["reveal_js"]
   },
   "reviewer": {
     id: "reviewer",

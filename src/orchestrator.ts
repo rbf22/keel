@@ -121,7 +121,7 @@ export class AgentOrchestrator {
     this.stateHashes = [];
   }
 
-  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "slide_writer", "observer"]) {
+  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "observer"]) {
     logger.info("orchestrator", "Starting complex task with tools", { userRequest, activePersonaIds });
     
     // Reset loop detection state for fresh task

@@ -22,16 +22,11 @@ app.innerHTML = `
       <div class="output-panel">
         <div class="output-tabs">
           <button class="tab-btn active" data-tab="chat">Chat</button>
-          <button class="tab-btn" data-tab="slides">Slides</button>
           <button class="tab-btn" data-tab="context">Context</button>
           <button class="tab-btn" data-tab="python">Python <span id="pythonStatus">(Idle)</span></button>
           <button class="tab-btn" data-tab="skills">Skills</button>
           <button class="tab-btn" data-tab="settings">Settings</button>
           <button class="tab-btn" data-tab="logs">Logs <span id="logNotification" class="notification-dot" style="display: none;"></span></button>
-        </div>
-
-        <div class="output-content" id="slidesTab" data-tab-content="slides" style="display: none;">
-          <iframe id="slidesPreview" style="width: 100%; height: 100%; border: none; background: white;"></iframe>
         </div>
 
         <div class="output-content active" id="chatTab" data-tab-content="chat">
@@ -141,7 +136,6 @@ app.innerHTML = `
         </div>
         <div id="personaSelection" style="display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; border-top: 1px solid #333; padding-top: 0.5rem;">
           <label class="switch-label" title="Information Specialist"><input type="checkbox" class="persona-checkbox" value="researcher" checked> Researcher</label>
-          <label class="switch-label" title="Presentation Expert"><input type="checkbox" class="persona-checkbox" value="slide_writer" checked> Slide Writer</label>
           <label class="switch-label" title="Quality Controller"><input type="checkbox" class="persona-checkbox" value="reviewer" checked> Reviewer</label>
           <label class="switch-label" title="System Monitor"><input type="checkbox" class="persona-checkbox" value="observer" checked> Observer</label>
         </div>
@@ -168,7 +162,6 @@ const setupControls = document.getElementById('setupControls')!
 const agentControls = document.getElementById('agentControls')!
 const multiAgentToggle = document.getElementById('multiAgentToggle')! as HTMLInputElement
 const personaSelection = document.getElementById('personaSelection')!
-const slidesPreview = document.getElementById('slidesPreview')! as HTMLIFrameElement
 
 // Skills elements
 const skillsList = document.getElementById('skillsList')!
@@ -617,11 +610,6 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
           contentDiv.textContent = update.content;
         }
 
-        // If slide writer produces Reveal.js content, update preview
-        if (update.personaId === 'slide_writer' && update.content.includes('reveal.js')) {
-            updateSlidesPreview(update.content);
-        }
-
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
     } catch (err: any) {
@@ -804,47 +792,6 @@ function sanitizeHTML(content: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#x27;');
-}
-
-function updateSlidesPreview(content: string) {
-    // Sanitize content before injecting into iframe
-    const sanitizedContent = sanitizeHTML(content);
-    
-    // Extract HTML content if present - more flexible with whitespace
-    let slideContent = sanitizedContent;
-    const htmlMatch = sanitizedContent.match(/```html\s*\n?([\s\S]*?)```/);
-    if (htmlMatch && htmlMatch[1]) {
-        slideContent = htmlMatch[1];
-    }
-    
-    // Further sanitize the slide content
-    slideContent = sanitizeHTML(slideContent);
-    
-    // Basic Reveal.js template
-    const revealTemplate = `
-        <!doctype html>
-        <html>
-            <head>
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css">
-            </head>
-            <body>
-                <div class="reveal">
-                    <div class="slides">
-                        ${slideContent}
-                    </div>
-                </div>
-                <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
-                <script>
-                    Reveal.initialize({
-                        hash: true,
-                        embedded: true
-                    });
-                </script>
-            </body>
-        </html>
-    `;
-    slidesPreview.srcdoc = revealTemplate;
 }
 
 sendBtn.onclick = () => handleSend()

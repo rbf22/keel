@@ -92,7 +92,7 @@ export const TOOLS: Record<string, Tool> = {
       properties: {
         agent: {
           type: "string",
-          enum: ["researcher", "coder", "reviewer", "slide_writer", "observer"],
+          enum: ["researcher", "coder", "reviewer", "observer"],
           description: "The ID of the agent to delegate to."
         },
         instruction: {
