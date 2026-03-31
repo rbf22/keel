@@ -1,11 +1,13 @@
 import { PythonRuntime, type PythonOutput } from '../python-runtime'
 import { skillStorage } from '../storage/skills'
 import { SkillsParser, ParsedSkill, type CodeBlock } from './parser'
+import { logger } from '../logger'
 
 export interface SkillExecutionContext {
   pythonRuntime: PythonRuntime
   userMessage?: string
   conversationHistory?: Array<{ role: string; content: string }>
+  timeout?: number // Optional timeout in milliseconds
 }
 
 export interface SkillExecutionResult {
@@ -22,17 +24,34 @@ export class SkillsEngine {
   async init(): Promise<void> {
     // Load all stored skills
     const storedSkills = await skillStorage.getAllSkills()
+    const failedSkills: string[] = []
     
     for (const stored of storedSkills) {
       try {
         const parsed = SkillsParser.parse(stored.content)
         this.skills.set(stored.name, parsed)
       } catch (error) {
-        console.error(`Failed to load skill ${stored.name}:`, error)
+        const skillName = stored.name || 'unknown'
+        console.error(`Failed to load skill ${skillName}:`, error)
+        failedSkills.push(skillName)
       }
     }
     
     this.initialized = true
+    
+    // Log summary of initialization
+    if (failedSkills.length > 0) {
+      logger.warn('skills', 'Some skills failed to load', {
+        totalSkills: storedSkills.length,
+        failedCount: failedSkills.length,
+        failedSkills
+      })
+    }
+    
+    logger.info('skills', 'Skills engine initialized', {
+      totalLoaded: this.skills.size,
+      totalFailed: failedSkills.length
+    })
   }
   
   // Register built-in skills
@@ -304,23 +323,27 @@ except Exception as e:
         }
         
         // Execute the code with proper error handling
-        context.pythonRuntime.execute(pythonCode).catch((err) => {
-          if (!hasResolved) {
-            hasResolved = true
-            errorResult = err instanceof Error ? err.message : 'Unknown execution error'
-            reject(err)
-          }
-        }).finally(() => {
-          // Always restore original handler
-          context.pythonRuntime.onOutput = originalOutputHandler
-        })
+        context.pythonRuntime.execute(pythonCode)
+          .catch((err) => {
+            if (!hasResolved) {
+              hasResolved = true
+              errorResult = err instanceof Error ? err.message : 'Unknown execution error'
+              reject(err)
+            }
+          })
+          .finally(() => {
+            // Always restore original handler
+            context.pythonRuntime.onOutput = originalOutputHandler
+          })
       })
       
-      // Wait for execution with timeout
+      // Wait for execution with timeout (configurable, default 30 seconds)
+      const timeoutMs = context.timeout || 30000;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Skill execution timeout')), 30000)
+        setTimeout(() => reject(new Error(`Skill execution timeout after ${timeoutMs}ms`)), timeoutMs)
       })
       
+      // Race the execution against timeout with proper cleanup
       await Promise.race([executionPromise, timeoutPromise])
       
       return {

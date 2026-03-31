@@ -18,7 +18,7 @@ export interface StorageWithDB {
     listFiles(): Promise<string[]>;
     readFile(path: string, level?: number): Promise<string | null>;
     writeFile(path: string, content: string, l0?: number, l1?: number): Promise<void>;
-    addMemory(category: any, content: string, tags?: string[]): Promise<void>;
+    addMemory(category: string, content: string, tags?: string[]): Promise<void>;
     db: IDBDatabase;
 }
 

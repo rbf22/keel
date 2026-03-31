@@ -84,12 +84,38 @@ export class SkillsParser {
     const result: Record<string, any> = {}
     const lines = yaml.split('\n')
     let currentKey: string | null = null
+    let inMultilineString = false
+    let multilineDelimiter: string | null = null
+    let multilineContent: string[] = []
     
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
       const trimmed = line.trim()
       
       // Skip empty lines and comments
       if (!trimmed || trimmed.startsWith('#')) {
+        continue
+      }
+      
+      // Handle multiline strings
+      if (inMultilineString) {
+        if (trimmed === multilineDelimiter) {
+          // End of multiline string
+          result[currentKey!] = multilineContent.join('\n')
+          inMultilineString = false
+          multilineContent = []
+          currentKey = null
+          multilineDelimiter = null
+        } else {
+          multilineContent.push(line)
+        }
+        continue
+      }
+      
+      // Check for multiline string start
+      if (currentKey && (trimmed === '|' || trimmed === '>' || trimmed.startsWith('|"') || trimmed.startsWith(">'"))) {
+        inMultilineString = true
+        multilineDelimiter = '|'
         continue
       }
       
@@ -103,26 +129,60 @@ export class SkillsParser {
           continue
         }
         
-        // Handle quoted strings
-        if (value.startsWith('"') && value.endsWith('"')) {
-          // Escape and unquote
-          result[key] = value.slice(1, -1).replace(/\\"/g, '"')
+        // Handle quoted strings with escape sequences
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+          const unquoted = value.slice(1, -1)
+          // Handle escape sequences
+          const unescaped = unquoted
+            .replace(/\\"/g, '"')
+            .replace(/\\'/g, "'")
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t')
+            .replace(/\\\\/g, '\\')
+          result[key] = unescaped
         } else if (value.startsWith('[') && value.endsWith(']')) {
           // Handle arrays
           try {
+            // Parse comma-separated values if not valid JSON
+            if (value.includes(',') && !value.includes('"')) {
+              result[key] = value.slice(1, -1).split(',').map(v => v.trim());
+            } else {
+              result[key] = JSON.parse(value)
+            }
+          } catch {
+            // If JSON.parse fails, try comma-separated
+            if (value.includes(',')) {
+              result[key] = value.slice(1, -1).split(',').map(v => v.trim());
+            } else {
+              result[key] = value
+            }
+          }
+        } else if (value.startsWith('{') && value.endsWith('}')) {
+          // Handle inline objects
+          try {
             result[key] = JSON.parse(value)
           } catch {
-            // If JSON.parse fails, treat as string
-            result[key] = value
+            console.warn(`Failed to parse inline object for key ${key}: ${value}`)
+            result[key] = {}
           }
         } else if (value === '') {
-          // Empty value could be a nested object
+          // Empty value could be a nested object or empty array
           currentKey = key
-          result[key] = {}
-        } else if (!isNaN(Number(value))) {
+          // Check if key suggests it should be an array
+          if (key === 'tags' || key.endsWith('s')) {
+            result[key] = []
+          } else {
+            result[key] = {}
+          }
+        } else if (!isNaN(Number(value)) && value !== '') {
+          // Handle numbers (including negative and decimals)
           result[key] = Number(value)
         } else if (value === 'true' || value === 'false') {
+          // Handle booleans
           result[key] = value === 'true'
+        } else if (value === 'null' || value === '~') {
+          // Handle null values
+          result[key] = null
         } else {
           // Unquoted string
           result[key] = value
@@ -132,11 +192,44 @@ export class SkillsParser {
         const nestedMatch = line.match(/^\s+(\w+):\s*(.*)$/)
         if (nestedMatch) {
           const [, nestedKey, nestedValue] = nestedMatch
-          if (nestedValue.startsWith('"') && nestedValue.endsWith('"')) {
-            result[currentKey][nestedKey] = nestedValue.slice(1, -1).replace(/\\"/g, '"')
+          
+          // Ensure we have an object to store nested properties
+          if (!result[currentKey] || typeof result[currentKey] !== 'object') {
+            result[currentKey] = {}
+          }
+          
+          if ((nestedValue.startsWith('"') && nestedValue.endsWith('"')) || 
+              (nestedValue.startsWith("'") && nestedValue.endsWith("'"))) {
+            const unquoted = nestedValue.slice(1, -1)
+            const unescaped = unquoted
+              .replace(/\\"/g, '"')
+              .replace(/\\'/g, "'")
+              .replace(/\\n/g, '\n')
+              .replace(/\\t/g, '\t')
+              .replace(/\\\\/g, '\\')
+            result[currentKey][nestedKey] = unescaped
+          } else if (nestedValue === 'true' || nestedValue === 'false') {
+            result[currentKey][nestedKey] = nestedValue === 'true'
+          } else if (nestedValue === 'null' || nestedValue === '~') {
+            result[currentKey][nestedKey] = null
+          } else if (!isNaN(Number(nestedValue)) && nestedValue !== '') {
+            result[currentKey][nestedKey] = Number(nestedValue)
           } else {
             result[currentKey][nestedKey] = nestedValue
           }
+        }
+      } else if (currentKey && trimmed.startsWith('- ')) {
+        // Handle array items in nested context
+        if (!Array.isArray(result[currentKey])) {
+          result[currentKey] = []
+        }
+        const item = trimmed.slice(2).trim()
+        // Remove quotes if present
+        if ((item.startsWith('"') && item.endsWith('"')) || 
+            (item.startsWith("'") && item.endsWith("'"))) {
+          result[currentKey].push(item.slice(1, -1))
+        } else {
+          result[currentKey].push(item)
         }
       }
     }

@@ -4,8 +4,8 @@ import { HandlerManager } from "./utils/handler-manager";
 export interface PythonOutput {
   type: 'log' | 'table' | 'chart' | 'download' | 'error' | 'ready' | 'complete';
   message?: string;
-  data?: any[];
-  spec?: any;
+  data?: unknown[];
+  spec?: unknown;
   filename?: string;
   content?: string;
 }
@@ -15,6 +15,7 @@ export class PythonRuntime {
   private outputHandlers: HandlerManager<(output: PythonOutput) => void>;
   private isReady = false;
   private executionTimeout = 10000; // 10 seconds
+  private currentTimeout: number | undefined = undefined;
 
   constructor(onOutput: (output: PythonOutput) => void) {
     // Initialize handler manager with the default handler
@@ -45,7 +46,7 @@ export class PythonRuntime {
   /**
    * Execute with a temporary output handler
    */
-  async withTemporaryOutput<R>(
+  executeWithTemporaryOutput<R>(
     handler: (output: PythonOutput) => void, 
     fn: () => Promise<R>
   ): Promise<R> {
@@ -96,13 +97,18 @@ export class PythonRuntime {
     const startTime = performance.now();
 
     return new Promise<void>((resolve, reject) => {
-      let timeout: any;
+      let timeout: number | undefined;
 
       const handleMessage = (event: MessageEvent) => {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (output.type === 'complete' || output.type === 'error') {
-          clearTimeout(timeout);
+          // Clear timeout and remove listener
+          if (timeout !== undefined) {
+            clearTimeout(timeout);
+            timeout = undefined;
+          }
           this.worker!.removeEventListener('message', handleMessage);
+          
           if (output.type === 'complete') {
             const duration = performance.now() - startTime;
             logger.info('python', 'Execution complete', { durationMs: duration });
@@ -118,16 +124,31 @@ export class PythonRuntime {
 
       this.worker!.postMessage(JSON.stringify({ type: 'execute', code }));
 
-      timeout = setTimeout(() => {
-        this.worker!.removeEventListener('message', handleMessage);
-        this.terminate();
-        this.onOutput({ type: 'error', message: 'Execution timed out. Worker terminated.' });
-        reject(new Error('Execution timed out'));
+      this.currentTimeout = timeout = setTimeout(() => {
+        // Check if this timeout is still the current one (prevents race conditions)
+        if (this.currentTimeout === timeout && this.worker) {
+          // Remove event listener first to prevent memory leaks
+          this.worker.removeEventListener('message', handleMessage);
+          // Clear the timeout reference
+          this.currentTimeout = undefined;
+          // Terminate the worker
+          this.terminate();
+          // Send error output
+          this.onOutput({ type: 'error', message: 'Execution timed out. Worker terminated.' });
+          // Reject the promise
+          reject(new Error('Execution timed out'));
+        }
       }, this.executionTimeout);
     });
   }
 
   terminate() {
+    // Clear any pending timeout
+    if (this.currentTimeout !== undefined) {
+      clearTimeout(this.currentTimeout);
+      this.currentTimeout = undefined;
+    }
+    
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;

@@ -98,17 +98,79 @@ export class SecureWebFetcher {
 
   /**
    * Sanitize fetched content to remove potentially dangerous elements
+   * Note: This is basic sanitization. For production, consider using a dedicated library like DOMPurify
    */
-  private static sanitizeContent(content: string): string {
-    // Remove script tags and event handlers
+  static sanitizeContent(content: string): string {
+    // Remove script tags and event handlers using regex (basic approach)
     let sanitized = content
+      // Remove script tags (more comprehensive pattern)
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-      .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
-      .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, '')
+      // Remove script tags with self-closing or malformed syntax
+      .replace(/<script[^>]*\/>/gi, '')
+      // Block JavaScript protocols
       .replace(/javascript:/gi, 'blocked:')
+      .replace(/data:text\/html/gi, 'blocked:')
+      // Block event handlers (more comprehensive)
+      .replace(/\son\w+\s*=\s*['"]*[^'"]*['"]*/gi, '')
       .replace(/on\w+\s*=/gi, 'data-blocked=')
-      .replace(/data:text\/html/gi, 'blocked:');
+      // Remove dangerous tags
+      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+      .replace(/<iframe[^>]*\/>/gi, '')
+      .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+      .replace(/<object[^>]*\/>/gi, '')
+      .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, '')
+      .replace(/<embed[^>]*\/>/gi, '')
+      // Remove meta refresh tags
+      .replace(/<meta[^>]*http-equiv=['"]*refresh['"][^>]*>/gi, '')
+      // Remove form tags with action="javascript:"
+      .replace(/<form[^>]*action\s*=\s*['"]*javascript:/gi, '<form data-blocked-action=')
+      // Remove vbscript:
+      .replace(/vbscript:/gi, 'blocked:');
+    
+    // Additional sanitization using DOMParser if available (more robust)
+    if (typeof DOMParser !== 'undefined') {
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(sanitized, 'text/html');
+        
+        // Remove all script elements (including any that might have been missed)
+        const scripts = doc.querySelectorAll('script');
+        scripts.forEach(script => script.remove());
+        
+        // Remove dangerous elements
+        const dangerousElements = doc.querySelectorAll('iframe, object, embed, form, meta, link, style');
+        dangerousElements.forEach(el => {
+          // Only remove if it has potentially dangerous attributes
+          if (el.hasAttributes()) {
+            for (let i = el.attributes.length - 1; i >= 0; i--) {
+              const attr = el.attributes[i];
+              const attrName = attr.name.toLowerCase();
+              const attrValue = attr.value.toLowerCase();
+              
+              // Remove dangerous attributes
+              if (attrName.startsWith('on') || 
+                  attrValue.includes('javascript:') || 
+                  attrValue.includes('vbscript:') ||
+                  attrValue.includes('data:text/html') ||
+                  attrName === 'href' && attrValue.startsWith('javascript:') ||
+                  attrName === 'src' && attrValue.startsWith('javascript:') ||
+                  attrName === 'action' && attrValue.startsWith('javascript:')) {
+                el.removeAttribute(attr.name);
+              }
+            }
+          }
+        });
+        
+        // Remove all style and script tags completely
+        doc.querySelectorAll('style, script').forEach(el => el.remove());
+        
+        // Get sanitized HTML
+        sanitized = doc.body.innerHTML || doc.documentElement.textContent || sanitized;
+      } catch (error) {
+        // If DOMParser fails, fall back to regex-sanitized content
+        console.warn('DOMParser sanitization failed, using regex fallback:', error);
+      }
+    }
     
     return sanitized;
   }
@@ -116,7 +178,7 @@ export class SecureWebFetcher {
   /**
    * Extract content from proxy response based on format
    */
-  private static extractContent(result: any, format: string): string | null {
+  private static extractContent(result: { content?: string; text?: string; body?: string; contents?: string; data?: string }, format: string): string | null {
     switch (format) {
       case 'allorigins':
         return result?.contents || null;

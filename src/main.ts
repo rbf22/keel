@@ -3,7 +3,7 @@ import { HybridLLMEngine, LocalLLMEngine, SUPPORTED_MODELS, detectBestModel } fr
 import { PythonRuntime, type PythonOutput } from './python-runtime'
 import { logger, type LogEntry } from './logger'
 import { storage } from './storage'
-import { AgentOrchestrator } from './orchestrator'
+import { AgentOrchestrator, type AgentResponse } from './orchestrator'
 import { skillsEngine } from './skills/engine'
 import { SkillsDownloader } from './skills/downloader'
 import { skillStorage } from './storage/skills'
@@ -227,7 +227,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 let engine: HybridLLMEngine | null = null
 let python: PythonRuntime | null = null
-let chatHistory: any[] = []
+let chatHistory: { role: 'user' | 'assistant' | 'system'; content: string }[] = []
 
 // Subscribe to logs
 let logsInitialized = false;
@@ -441,8 +441,8 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
     container.className = 'data-table-container';
     const table = document.createElement('table');
 
-    if (output.data.length > 0) {
-      const keys = Object.keys(output.data[0]);
+    if (output.data && Array.isArray(output.data) && output.data.length > 0) {
+      const keys = Object.keys(output.data[0] as Record<string, unknown>);
       const thead = document.createElement('thead');
       const headerRow = document.createElement('tr');
       keys.forEach(key => {
@@ -454,11 +454,11 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
       table.appendChild(thead);
 
       const tbody = document.createElement('tbody');
-      output.data.forEach(row => {
+      output.data.forEach((row: unknown) => {
         const tr = document.createElement('tr');
         keys.forEach(key => {
           const td = document.createElement('td');
-          td.textContent = String(row[key]);
+          td.textContent = (row as Record<string, unknown>)[key] as string || '';
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -580,7 +580,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
     const agentDivs: Record<string, HTMLDivElement> = {};
 
     try {
-      await orchestrator.runTask(text, (update) => {
+      await orchestrator.runTask(text, (update: AgentResponse) => {
         if (!agentDivs[update.personaId]) {
           const div = document.createElement('div');
           div.className = `message assistant-message agent-${update.personaId}`;
@@ -597,7 +597,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
         const contentDiv = agentDivs[update.personaId].querySelector('.agent-content')!;
 
         if (update.type === 'table' && update.data) {
-          handlePythonOutput({ type: 'table', data: update.data }, contentDiv as HTMLElement);
+          handlePythonOutput({ type: 'table', data: update.data as unknown[] }, contentDiv as HTMLElement);
         } else if (update.type === 'chart' && update.data) {
           handlePythonOutput({ type: 'chart', spec: update.data }, contentDiv as HTMLElement);
         } else if (update.type === 'error') {

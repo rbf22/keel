@@ -3,7 +3,7 @@ import { PERSONAS } from "./personas";
 import { storage, MemoryCategory } from "./storage";
 import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
-import { PythonRuntime } from "./python-runtime";
+import { PythonRuntime, PythonOutput } from "./python-runtime";
 import { getSystemContext } from "./tools";
 import { skillsEngine } from "./skills/engine";
 import { SecureWebFetcher } from "./utils/secure-web-fetcher";
@@ -12,7 +12,17 @@ export interface AgentResponse {
   personaId: string;
   content: string;
   type?: 'text' | 'table' | 'chart' | 'error' | 'plan' | 'observation';
-  data?: any;
+  data?: unknown;
+}
+
+interface ToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+interface PendingPythonExecution extends ToolCall {
+  name: 'execute_python';
+  args: { code: string };
 }
 
 export class AgentOrchestrator {
@@ -20,7 +30,8 @@ export class AgentOrchestrator {
   private python: PythonRuntime;
   private chatHistory: ChatCompletionMessageParam[] = [];
   private maxLoops = 15;
-  private pendingToolCall: { name: string, args: any } | null = null;
+  private pendingToolCall: PendingPythonExecution | null = null;
+  private isExecutingPendingTool: boolean = false; // Track if we're currently executing a pending tool
   
   // Enhanced loop detection state
   private agentSequence: string[] = [];
@@ -36,12 +47,27 @@ export class AgentOrchestrator {
   /**
    * Generate a hash of current state to detect repeating patterns
    */
-  private hashState(agentId: string, instruction: string): string {
+  private async hashState(agentId: string, instruction: string): Promise<string> {
     // Get last 3 messages from history for context
     const recentContent = this.chatHistory.slice(-3).map(m => m.content).join('');
     const stateString = `${agentId}|${instruction}|${recentContent}`;
     
-    // Simple hash function (could be improved with crypto.subtle if needed)
+    // Use Web Crypto API for stronger hashing if available
+    if (crypto.subtle) {
+      try {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(stateString);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        return hashHex;
+      } catch (error) {
+        // Fallback to simple hash if crypto fails
+        logger.warn('orchestrator', 'Crypto hash failed, using fallback', { error });
+      }
+    }
+    
+    // Fallback to simple hash function
     let hash = 0;
     for (let i = 0; i < stateString.length; i++) {
       const char = stateString.charCodeAt(i);
@@ -55,18 +81,29 @@ export class AgentOrchestrator {
    * Detect if we're in a repeating agent cycle
    */
   private detectAgentCycle(): boolean {
-    if (this.agentSequence.length < 4) return false;
+    if (this.agentSequence.length < 6) return false; // Need at least some repetition
     
-    // Get the last 4 agent IDs
-    const recentSequence = this.agentSequence.slice(-4).join(',');
+    // Try to find cycles of different lengths (2-4 agents)
+    for (let cycleLength = 2; cycleLength <= 4; cycleLength++) {
+      if (this.agentSequence.length < cycleLength * 2) continue;
+      
+      // Get the last cycleLength agents
+      const recentIds = this.agentSequence.slice(-cycleLength);
+      
+      // Look for this sequence earlier in the array
+      for (let i = 0; i <= this.agentSequence.length - (cycleLength * 2); i++) {
+        const candidateSequence = this.agentSequence.slice(i, i + cycleLength);
+        
+        // Check if sequences match exactly
+        if (candidateSequence.length === recentIds.length &&
+            candidateSequence.every((id, index) => id === recentIds[index])) {
+          // Found a matching sequence that's not overlapping
+          return true;
+        }
+      }
+    }
     
-    // Check if this exact sequence appeared before (excluding the current occurrence)
-    const previousIndex = this.agentSequence.lastIndexOf(
-      recentSequence, 
-      this.agentSequence.length - 5 // Look before the current sequence
-    );
-    
-    return previousIndex > -1;
+    return false;
   }
   
   /**
@@ -105,8 +142,17 @@ export class AgentOrchestrator {
       loopCount++;
       logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`);
       
+      // Handle reviewer code injection before state hashing
+      if (nextAgentId === "reviewer" && nextAgentInstruction.includes("Review the Python code")) {
+        // Find the last Python code block in chat history to provide better context
+        const lastCoderMessage = [...this.chatHistory].reverse().find(m => m.role === "assistant" && typeof m.content === 'string' && m.content.includes("```python"));
+        if (lastCoderMessage && typeof lastCoderMessage.content === 'string') {
+            nextAgentInstruction += `\n\nCode to review:\n${lastCoderMessage.content}`;
+        }
+      }
+
       // Enhanced loop detection with state hashing and cycle detection
-      const currentStateHash = this.hashState(nextAgentId, nextAgentInstruction);
+      const currentStateHash = await this.hashState(nextAgentId, nextAgentInstruction);
       
       // Check for exact state repetition
       if (this.detectStateRepetition(currentStateHash)) {
@@ -163,17 +209,6 @@ export class AgentOrchestrator {
       } else {
         noProgressCount = 0;
         lastAgentId = nextAgentId;
-      }
-
-      // Small delay between agent turns to ensure WebLLM state is settled
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      if (nextAgentId === "reviewer" && nextAgentInstruction.includes("Review the Python code")) {
-        // Find the last Python code block in chat history to provide better context
-        const lastCoderMessage = [...this.chatHistory].reverse().find(m => m.role === "assistant" && typeof m.content === 'string' && m.content.includes("```python"));
-        if (lastCoderMessage && typeof lastCoderMessage.content === 'string') {
-            nextAgentInstruction += `\n\nCode to review:\n${lastCoderMessage.content}`;
-        }
       }
 
       const persona = PERSONAS[nextAgentId];
@@ -236,17 +271,29 @@ Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
       
       if (toolCall) {
           if (toolCall.name === "delegate") {
-              nextAgentId = toolCall.args.agent;
-              nextAgentInstruction = toolCall.args.instruction;
+              nextAgentId = toolCall.args.agent as string;
+              nextAgentInstruction = toolCall.args.instruction as string;
               toolResult = `Delegated to ${nextAgentId} with instructions: ${nextAgentInstruction}`;
           } else if (toolCall.name === "execute_python" && nextAgentId !== "reviewer") {
               // Intercept execute_python if it's not from a reviewer (usually coder)
               // Force delegation to Reviewer first
-              this.pendingToolCall = toolCall;
-              nextAgentId = "reviewer";
-              nextAgentInstruction = `Review the Python code below and the planned execution. If it looks correct and safe, say "APPROVED" to allow execution. If not, provide fixes.\n\nCode:\n${toolCall.args.code}`;
-              toolResult = `Execution pending. Delegated to Reviewer for approval.`;
-              this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
+              // Validate that this is a proper Python execution call
+              if (toolCall.name === "execute_python" && typeof toolCall.args?.code === "string") {
+                  // Check if we're already executing a pending tool to prevent reentrancy
+                  if (this.isExecutingPendingTool) {
+                      toolResult = "Cannot execute Python code while another execution is in progress.";
+                      this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
+                  } else {
+                      this.pendingToolCall = toolCall as PendingPythonExecution;
+                      nextAgentId = "reviewer";
+                      nextAgentInstruction = `Review the Python code below and the planned execution. If it looks correct and safe, say "APPROVED" to allow execution. If not, provide fixes.\n\nCode:\n${toolCall.args.code}`;
+                      toolResult = `Execution pending. Delegated to Reviewer for approval.`;
+                      this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
+                  }
+              } else {
+                  toolResult = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
+                  this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
+              }
           } else {
               toolResult = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
               this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
@@ -274,10 +321,11 @@ Provide a concise observation for the Manager.`;
       // Post-agent logic (Reviewer automation, etc.)
       // Always clear pending tool call when reviewer responds
       if (persona.id === "reviewer") {
-          if (agentContent.includes("APPROVED") && this.pendingToolCall) {
+          if (agentContent.includes("APPROVED") && this.pendingToolCall && !this.isExecutingPendingTool) {
               // If Reviewer approves, execute the pending tool call
               const currentPendingCall = this.pendingToolCall; // Capture before clearing
               this.pendingToolCall = null; // Clear immediately to prevent re-execution
+              this.isExecutingPendingTool = true; // Set execution flag
               
               try {
                   toolResult = await this.executeTool(currentPendingCall.name, currentPendingCall.args, onUpdate);
@@ -288,10 +336,13 @@ Provide a concise observation for the Manager.`;
                   logger.error("orchestrator", "Failed to execute pending tool call after approval", { error: e });
                   toolResult = `Error executing approved code: ${e.message}`;
                   this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
+              } finally {
+                  this.isExecutingPendingTool = false; // Clear execution flag
               }
           } else {
               // Not approved, send back to coder
               this.pendingToolCall = null; // Clear pending call
+              this.isExecutingPendingTool = false; // Clear execution flag if set
               nextAgentId = "coder";
               nextAgentInstruction = `The Reviewer found issues with your code. Please fix them:\n\n${agentContent}`;
           }
@@ -313,16 +364,17 @@ Provide a concise observation for the Manager.`;
     return this.chatHistory;
   }
 
-  private parseToolCall(text: string): { name: string, args: any } | null {
+  private parseToolCall(text: string): ToolCall | null {
     const callMatch = text.match(/CALL:\s*(\w+)/);
     const argsMatch = text.match(/ARGUMENTS:\s*(\{[\s\S]*?\})/);
 
     if (callMatch && argsMatch) {
         try {
-            return {
+            const toolCall: ToolCall = {
                 name: callMatch[1],
-                args: JSON.parse(argsMatch[1])
+                args: JSON.parse(argsMatch[1]) as Record<string, unknown>
             };
+            return toolCall;
         } catch (e) {
             logger.error("orchestrator", "Failed to parse tool arguments", { error: e, text: argsMatch[1] });
         }
@@ -330,28 +382,28 @@ Provide a concise observation for the Manager.`;
     return null;
   }
 
-  private async executeTool(name: string, args: any, onUpdate: (response: AgentResponse) => void): Promise<string> {
+  private async executeTool(name: string, args: Record<string, unknown>, onUpdate: (response: AgentResponse) => void): Promise<string> {
       logger.info("orchestrator", `Executing tool: ${name}`, args);
       try {
           switch (name) {
               case "vfs_write":
-                  await storage.writeFile(args.path, args.content, args.l0, args.l1);
-                  return `Successfully wrote to ${args.path}`;
+                  await storage.writeFile(args.path as string, args.content as string, args.l0 as string, args.l1 as string);
+                  return `Successfully wrote to ${args.path as string}`;
               case "vfs_read":
-                  const content = await storage.readFile(args.path, args.level);
+                  const content = await storage.readFile(args.path as string, args.level as "L0" | "L1" | "L2" | undefined);
                   return content || "File not found.";
               case "vfs_ls":
-                  const files = await storage.listFiles(args.prefix);
+                  const files = await storage.listFiles(args.prefix as string | undefined);
                   return files.join(", ") || "No files found.";
               case "memory_update":
-                  await storage.addMemory(args.category as MemoryCategory, args.content, args.tags);
+                  await storage.addMemory(args.category as MemoryCategory, args.content as string, args.tags as string[]);
                   return "Memory updated.";
               case "web_fetch":
                   // Use secure web fetcher with security measures
-                  onUpdate({ personaId: "system", content: `Fetching ${args.url}...` });
+                  onUpdate({ personaId: "system", content: `Fetching ${args.url as string}...` });
                   
                   try {
-                      const content = await SecureWebFetcher.fetch(args.url, {
+                      const content = await SecureWebFetcher.fetch(args.url as string, {
                           timeout: 10000,
                           maxSize: 5000,
                           sanitizeContent: true
@@ -374,26 +426,26 @@ Provide a concise observation for the Manager.`;
                   let pyOutput = "";
                   
                   // Create a handler that captures output and sends updates
-                  const outputHandler = (out: any) => {
+                  const outputHandler = (out: PythonOutput) => {
                       if (out.type === 'log' || out.type === 'error') {
                           pyOutput += (out.message + "\n");
                           onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
                       } else if (out.type === 'table') {
-                          const columns = out.data?.[0] ? Object.keys(out.data[0]).join(", ") : "none";
+                          const columns = (out.data as Array<Record<string, unknown>>)?.[0] ? Object.keys((out.data as Array<Record<string, unknown>>)[0]).join(", ") : "none";
                           const tableSummary = `[Data Table Output: ${out.data?.length || 0} rows, Columns: ${columns}]`;
                           pyOutput += tableSummary + "\n";
-                          onUpdate({ personaId: "python", content: tableSummary, type: "table", data: out.data });
+                          onUpdate({ personaId: "python", content: tableSummary, type: 'table', data: out.data });
                       } else if (out.type === 'chart') {
                           const chartSummary = `[Vega-Lite Chart Output: ${JSON.stringify(out.spec).substring(0, 200)}...]`;
                           pyOutput += chartSummary + "\n";
-                          onUpdate({ personaId: "python", content: chartSummary, type: "chart", data: out.spec });
+                          onUpdate({ personaId: "python", content: chartSummary, type: 'chart', data: out.spec });
                       }
                   };
                   
                   // Push handler, execute, then restore
                   this.python.onOutput = outputHandler;
                   try {
-                      await this.python.execute(args.code);
+                      await this.python.execute(args.code as string);
                   } finally {
                       this.python.restoreHandler();
                   }

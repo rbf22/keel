@@ -1,4 +1,6 @@
 // Skill storage interface
+import { logger } from '../logger';
+
 export interface StoredSkill {
   name: string
   description: string
@@ -56,16 +58,30 @@ export class SkillStorage {
         const usage = estimate.usage || 0
         const quota = estimate.quota || 0
         
-        // Warn if using more than 80% of quota
-        if (quota > 0 && usage / quota > 0.8) {
-          console.warn(`Storage quota warning: ${Math.round(usage / quota * 100)}% used`)
+        // Calculate approximate size of the skill
+        const skillSize = new Blob([JSON.stringify(skill)]).size
+        
+        // Check if adding this skill would exceed quota
+        if (quota > 0 && usage + skillSize >= quota) {
+          throw new Error(`Storage quota exceeded. Cannot save skill "${skill.name}". Please delete some skills to free up space.`)
         }
         
-        // Throw error if quota exceeded
-        if (quota > 0 && usage >= quota) {
-          throw new Error('Storage quota exceeded. Please delete some skills to free up space.')
+        // Warn if using more than 80% of quota
+        if (quota > 0 && (usage + skillSize) / quota > 0.8) {
+          const newUsagePercent = Math.round((usage + skillSize) / quota * 100)
+          console.warn(`Storage quota warning: ${newUsagePercent}% used after saving this skill`)
+          logger.warn('skills', 'Storage quota warning', {
+            skillName: skill.name,
+            currentUsage: usage,
+            skillSize,
+            quota,
+            usagePercent: newUsagePercent
+          })
         }
       } catch (error) {
+        if (error instanceof Error && error.message.includes('quota exceeded')) {
+          throw error
+        }
         console.warn('Could not check storage quota:', error)
       }
     }
@@ -76,7 +92,10 @@ export class SkillStorage {
       
       const request = store.put(skill)
       request.onerror = () => reject(new Error(`Failed to save skill: ${request.error?.message || 'Unknown error'}`))
-      request.onsuccess = () => resolve()
+      request.onsuccess = () => {
+        logger.info('skills', 'Skill saved successfully', { skillName: skill.name })
+        resolve()
+      }
     })
   }
 
@@ -159,15 +178,56 @@ export class SkillStorage {
   }
 
   async importSkills(jsonData: string): Promise<number> {
-    const skills = JSON.parse(jsonData) as StoredSkill[]
-    let count = 0
+    let skills: StoredSkill[];
     
-    for (const skill of skills) {
-      await this.saveSkill(skill)
-      count++
+    // Validate and parse JSON
+    try {
+      skills = JSON.parse(jsonData);
+    } catch (error) {
+      throw new Error(`Invalid JSON data: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     
-    return count
+    // Validate array structure
+    if (!Array.isArray(skills)) {
+      throw new Error('Import data must be an array of skills');
+    }
+    
+    // Validate each skill before starting import
+    for (const skill of skills) {
+      if (!skill || !skill.name || !skill.content || !skill.description) {
+        throw new Error(`Invalid skill: missing required fields (name, content, description)`);
+      }
+    }
+    
+    // Track imported skills for rollback
+    const importedSkills: string[] = [];
+    let count = 0;
+    
+    try {
+      for (const skill of skills) {
+        await this.saveSkill(skill);
+        importedSkills.push(skill.name);
+        count++;
+      }
+      return count;
+    } catch (error) {
+      // Rollback on failure
+      logger.error('skills', 'Import failed, rolling back', { 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        importedCount: importedSkills.length
+      });
+      
+      // Remove imported skills
+      for (const skillName of importedSkills) {
+        try {
+          await this.deleteSkill(skillName);
+        } catch (rollbackError) {
+          console.error(`Failed to rollback skill ${skillName}:`, rollbackError);
+        }
+      }
+      
+      throw new Error(`Import failed after ${count} skills. Changes have been rolled back.`);
+    }
   }
 }
 

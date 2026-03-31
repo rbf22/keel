@@ -1,6 +1,5 @@
 import { type StoredSkill } from '../storage/skills'
-import { SkillsParser, CodeBlock } from './parser'
-import { JS_to_Python_Converter } from './parser'
+import { SkillsParser, CodeBlock, JS_to_Python_Converter } from './parser'
 import { LLMEngine } from '../llm'
 
 export interface GitHubRepo {
@@ -38,23 +37,72 @@ export class SkillsDownloader {
   
   // Parse GitHub URL or owner/repo format
   static parseRepoUrl(input: string): GitHubRepo | null {
+    // Trim whitespace and remove trailing slashes
+    input = input.trim().replace(/\/+$/, '');
+    
     // Handle owner/repo format
-    const simpleMatch = input.match(/^([\w-]+)\/([\w-]+)$/)
+    const simpleMatch = input.match(/^([\w-]+)\/([\w-]+)$/);
     if (simpleMatch) {
       return { owner: simpleMatch[1], repo: simpleMatch[2] }
     }
     
-    // Handle full GitHub URL
-    const urlMatch = input.match(/github\.com\/([\w-]+)\/([\w-]+)(?:\/tree\/(.+))?/)
+    // Handle full GitHub URL (more comprehensive regex)
+    const urlMatch = input.match(/^(?:https?:\/\/)?(?:www\.)?(?:github\.com\/|git@github\.com:)?([\w-]+)\/([\w-]+)(?:\.git)?(?:\/(?:tree|blob|commits|issues|pulls)\/([^?#]+))?(?:\?([^#]*))?(?:#(.*))?$/);
     if (urlMatch) {
+      let branch = urlMatch[3] || 'main';
+      
+      // Handle branch paths that might include subdirectories
+      if (branch && branch.includes('/')) {
+        branch = branch.split('/')[0];
+      }
+      
+      // Handle .git suffix (already removed in regex but keeping for safety)
+      const repo = urlMatch[2].replace(/\.git$/, '');
+      
       return { 
         owner: urlMatch[1], 
-        repo: urlMatch[2],
-        branch: urlMatch[3] || 'main'
+        repo,
+        branch
       }
     }
     
-    return null
+    // Handle GitHub Enterprise URLs (basic support)
+    const enterpriseMatch = input.match(/^(?:https?:\/\/)?([^\/]+)\/([\w-]+)\/([\w-]+)(?:\.git)?(?:\/(?:tree|blob)\/([^?#]+))?$/);
+    if (enterpriseMatch && enterpriseMatch[1] !== 'github.com') {
+      let branch = enterpriseMatch[4] || 'main';
+      
+      if (branch && branch.includes('/')) {
+        branch = branch.split('/')[0];
+      }
+      
+      return { 
+        owner: enterpriseMatch[2], 
+        repo: enterpriseMatch[3].replace(/\.git$/, ''),
+        branch
+      }
+    }
+    
+    // Handle git protocol URLs
+    const gitMatch = input.match(/^git:\/\/github\.com\/([\w-]+)\/([\w-]+)\.git$/);
+    if (gitMatch) {
+      return { 
+        owner: gitMatch[1], 
+        repo: gitMatch[2],
+        branch: 'main'
+      }
+    }
+    
+    // Handle SSH protocol URLs
+    const sshMatch = input.match(/^ssh:\/\/git@github\.com\/([\w-]+)\/([\w-]+)\.git$/);
+    if (sshMatch) {
+      return { 
+        owner: sshMatch[1], 
+        repo: sshMatch[2],
+        branch: 'main'
+      }
+    }
+    
+    return null;
   }
   
   // Fetch skills from a GitHub repository

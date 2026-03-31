@@ -16,8 +16,18 @@ import json
 from js import postMessage
 
 def display_table(df, *args):
+    """
+    Display a pandas DataFrame as a table in the output.
+    
+    Args:
+        df: pandas DataFrame to display
+        *args: Additional arguments (deprecated, will be ignored)
+        
+    Note: This function accepts only one DataFrame. Additional arguments are ignored
+          and will be removed in a future version.
+    """
     if args:
-        log(f"Warning: display_table received extra arguments: {args}. It only expects a single pandas DataFrame.")
+        log(f"Warning: display_table received {len(args)} extra arguments. These arguments are deprecated and will be ignored. Only the first DataFrame argument is used.")
     # Convert dataframe to JSON records
     try:
         if hasattr(df, 'to_json'):
