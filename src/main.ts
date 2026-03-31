@@ -38,6 +38,7 @@ app.innerHTML = `
             <div class="input-area">
               <input type="text" id="userInput" placeholder="Type a message..." disabled />
               <button id="sendBtn" disabled>Send</button>
+              <button id="stopBtn" style="display: none; background-color: #ff3b30;">Stop</button>
             </div>
           </div>
         </div>
@@ -152,6 +153,7 @@ const modelSelect = document.getElementById('modelSelect')! as HTMLSelectElement
 const messagesEl = document.getElementById('messages')!
 const userInput = document.getElementById('userInput')! as HTMLInputElement
 const sendBtn = document.getElementById('sendBtn')! as HTMLButtonElement
+const stopBtn = document.getElementById('stopBtn')! as HTMLButtonElement
 const initBtn = document.getElementById('initBtn')! as HTMLButtonElement
 const statsEl = document.getElementById('stats')!
 const debugLogsEl = document.getElementById('logsContainer')!
@@ -222,6 +224,29 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 let engine: HybridLLMEngine | null = null
 let python: PythonRuntime | null = null
 let chatHistory: { role: 'user' | 'assistant' | 'system'; content: string }[] = []
+let isTaskRunning = false;
+
+function setTaskRunning(running: boolean) {
+  isTaskRunning = running;
+  stopBtn.style.display = running ? 'block' : 'none';
+  sendBtn.style.display = running ? 'none' : 'block';
+  userInput.disabled = running;
+  
+  if (isTaskRunning) {
+    logger.info('system', 'Task execution started');
+  }
+}
+
+stopBtn.onclick = () => {
+  if (python) {
+    python.terminate();
+    // Re-initialize python since it was terminated
+    python = new PythonRuntime(handlePythonOutput);
+    void python.init();
+  }
+  setTaskRunning(false);
+  addMessage("Task stopped by user.", "system" as any);
+};
 
 // Subscribe to logs
 let logsInitialized = false;
@@ -477,11 +502,11 @@ initBtn.onclick = async () => {
   localStorage.setItem('selectedModelId', selectedModelId);
 
   try {
-    logger.info('system', `Initializing storage...`);
-    await storage.init();
-
-    logger.info('system', `Initializing with model: ${selectedModelId}`);
-    // Init Python first or in parallel
+    logger.info('system', `Initializing storage, python, and engine...`);
+    
+    // Start all major initializations in parallel
+    const storagePromise = storage.init();
+    
     python = new PythonRuntime(handlePythonOutput);
     const pythonPromise = python.init();
 
@@ -502,8 +527,10 @@ initBtn.onclick = async () => {
 
     const enginePromise = engine.init();
 
-    // Initialize LLM converter for JavaScript to Python conversion
-    await Promise.all([pythonPromise, enginePromise]);
+    // Wait for core systems to be ready
+    await Promise.all([storagePromise, pythonPromise, enginePromise]);
+    
+    logger.info('system', 'Core systems ready, initializing skills...');
     await SkillsDownloader.setLLMEngine(engine);
 
     // Initialize skills engine
@@ -553,6 +580,8 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
     chatHistory.push({ role: 'user', content: text });
   }
 
+  setTaskRunning(true);
+
   if (multiAgentToggle.checked) {
     const orchestrator = new AgentOrchestrator(engine, python);
     const agentDivs: Record<string, HTMLDivElement> = {};
@@ -597,8 +626,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       addMessage(`Orchestrator Error: ${errorMessage}`, 'assistant');
     } finally {
-      userInput.disabled = false;
-      sendBtn.disabled = false;
+      setTaskRunning(false);
     }
     return;
   }
@@ -759,13 +787,8 @@ Please analyze the error and provide a corrected version of the code.`;
     assistantDiv.textContent = `Error: ${errorMessage}`
   } finally {
     if (retryCount === 0) {
-      // Re-enable input only if it's the top-level call and we are not recovering
-      // Wait a bit to ensure all state is updated
-      setTimeout(() => {
-        userInput.disabled = false;
-        sendBtn.disabled = false;
-        userInput.focus();
-      }, 100);
+      setTaskRunning(false);
+      userInput.focus();
     }
   }
 }

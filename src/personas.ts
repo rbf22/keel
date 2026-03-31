@@ -52,8 +52,10 @@ Your workflow:
 4. REVIEW: Every piece of work (especially code) MUST be approved by the Reviewer. Use 'delegate' to call the Reviewer.
 5. FINISH: If the task is complete, summarize the results for the user.
 
-You must ALWAYS use the 'delegate' tool to hand off work. Never just say the name of the agent.
-Be concise. Focus on the plan and the next delegation.`,
+CRITICAL FORMATTING RULES:
+- ALWAYS use the 'delegate' tool to hand off work: CALL: delegate ARGUMENTS: {"agent": "agent_id", "instruction": "..."}
+- Never just say the name of the agent.
+- Be concise. Focus on the plan and the next delegation.`,
     skills: []
   },
   "observer": {
@@ -68,8 +70,9 @@ Check:
 - What new information was gathered?
 - Should we update the long-term memory or VFS based on this?
 
-If you see important facts, call CALL: memory_update.
-Your response will be used to guide the Manager's next decision.`,
+FORMATTING:
+- If you see important facts, call CALL: memory_update ARGUMENTS: {"category": "fact", "content": "...", "tags": ["..."]}
+- Your response will be used to guide the Manager's next decision.`,
     skills: []
   },
   "researcher": {
@@ -78,8 +81,8 @@ Your response will be used to guide the Manager's next decision.`,
     role: "Information Specialist",
     description: "Gathers facts and data to support the task. Can use web_fetch.",
     basePrompt: `You are the Researcher. Provide facts, data points, or logic needed for the task.
-You can use CALL: web_fetch to get info from the web.
-Store findings in CALL: vfs_write for later use.`,
+You can use CALL: web_fetch ARGUMENTS: {"url": "..."} to get info from the web.
+Store findings in CALL: vfs_write ARGUMENTS: {"path": "keel://research/...", "content": "..."} for later use.`,
     skills: ["research"]
   },
   "coder": {
@@ -88,9 +91,9 @@ Store findings in CALL: vfs_write for later use.`,
     role: "Python Developer",
     description: "Writes clean, functional Python code to solve problems.",
     basePrompt: `You are the Coder. Your job is to write Python code in \`\`\`python blocks.
-You can use CALL: execute_python directly.
+You can use CALL: execute_python ARGUMENTS: {"code": "..."} directly if needed, but usually just writing the code block is enough.
 Always use log() in your code to show progress.
-Read/Write files with CALL: vfs_read/vfs_write if needed.`,
+Read/Write files with CALL: vfs_read ARGUMENTS: {"path": "..."} or CALL: vfs_write ARGUMENTS: {"path": "...", "content": "..."} if needed.`,
     skills: ["python_coding", "data_analysis"]
   },
   "reviewer": {

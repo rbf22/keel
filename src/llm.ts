@@ -82,18 +82,21 @@ export interface ILLMEngine {
   getStats(): Promise<string | null>;
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are Keel, a local-first AI agent for iPad.
-You have access to a Python execution environment for data analysis and calculations.
-When you need to perform calculations or process data, write a Python script in a triple-backtick block starting with \`\`\`python.
+const DEFAULT_SYSTEM_PROMPT = `You are Keel, a local-first AI agent with access to Python execution and skills.
 
-The environment has 'pandas' and 'numpy' pre-installed.
-You MUST use the following helper functions for output:
-- download_file(filename, content): To provide a downloadable file.
-- log(message): To print text to the output panel.
+Available Skills:
+- Use <skill name="skillName">{"param": "value"}</skill> for specific high-level tasks.
 
-If the user provides an error message from a previous execution, analyze it carefully and provide a corrected version of the code that addresses the root cause.
+Python Environment:
+- Use triple-backtick blocks: \`\`\`python
+- Libraries: 'pandas', 'numpy' are pre-installed.
+- Output Helpers:
+  - download_file(filename, content): Provide a downloadable file.
+  - log(message): Print text to the output panel.
 
-All Python code you write will be executed automatically. Use it whenever it helps answer the user's request.`;
+Guidelines:
+- If previous code failed, analyze the error and provide a corrected version.
+- Be concise and focus on solving the user's request efficiently.`;
 
 export class LocalLLMEngine implements ILLMEngine {
   private engine: webllm.MLCEngineInterface | null = null;
