@@ -377,41 +377,6 @@ button:disabled {
   border-left: 3px solid #007aff;
 }
 
-.data-table-container {
-  overflow-x: auto;
-  border: 1px solid #333;
-  border-radius: 4px;
-  margin-top: 0.5rem;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.75rem;
-  background: #111;
-}
-
-th, td {
-  padding: 0.4rem;
-  border: 1px solid #333;
-  text-align: left;
-}
-
-th {
-  background: #222;
-  color: #fff;
-}
-
-.chart-image {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin-top: 0.5rem;
-  background: white;
-  padding: 0.5rem;
-  border-radius: 4px;
-}
-
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;

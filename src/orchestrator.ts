@@ -416,15 +416,6 @@ Provide a concise observation for the Manager.`;
                       if (out.type === 'log' || out.type === 'error') {
                           pyOutput += (out.message + "\n");
                           onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
-                      } else if (out.type === 'table') {
-                          const columns = (out.data as Array<Record<string, unknown>>)?.[0] ? Object.keys((out.data as Array<Record<string, unknown>>)[0]).join(", ") : "none";
-                          const tableSummary = `[Data Table Output: ${Array.isArray(out.data) ? out.data.length : 0} rows, Columns: ${columns}]`;
-                          pyOutput += tableSummary + "\n";
-                          onUpdate({ personaId: "python", content: tableSummary, type: 'table', data: out.data });
-                      } else if (out.type === 'chart') {
-                          const chartSummary = `[Chart Output]`;
-                          pyOutput += chartSummary + "\n";
-                          onUpdate({ personaId: "python", content: chartSummary, type: 'chart', data: out.data });
                       }
                   };
                   

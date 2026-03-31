@@ -19,7 +19,7 @@ export const SKILLS: Record<string, Skill> = {
     id: "data_analysis",
     name: "Data Analysis",
     instructions: "Use pandas and numpy to analyze data. Always log(message) important steps.",
-    pythonTools: ["pandas", "numpy", "matplotlib", "seaborn"]
+    pythonTools: ["pandas", "numpy"]
   },
   "research": {
     id: "research",

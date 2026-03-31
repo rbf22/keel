@@ -195,65 +195,22 @@ except Exception as e:
     // Data analysis skill
     this.registerSkill({
       name: 'analyze_data',
-      description: 'Analyze data using pandas and create summaries',
-      content: `---\nname: analyze_data\ndescription: Analyze data using pandas and create summaries\n---\n\nUse this skill when you need to:\n- Analyze CSV or JSON data\n- Generate data summaries\n- Perform statistical analysis\n- Understand data structure`,
-      instructions: `Use this skill when you need to:\n- Analyze CSV or JSON data\n- Generate data summaries\n- Perform statistical analysis\n- Understand data structure`,
+      description: 'Perform advanced data analysis using pandas',
+      content: `---\nname: analyze_data\ndescription: Perform advanced data analysis using pandas\n---\n\nUse this skill when you need to:\n- Group and aggregate data\n- Filter and sort datasets\n- Calculate statistics\n- Clean and transform data`,
+      instructions: `Use this skill when you need to:\n- Group and aggregate data\n- Filter and sort datasets\n- Calculate statistics\n- Clean and transform data`,
       codeBlocks: [{
         language: 'python',
         code: `import pandas as pd
-import io
+import numpy as np
 
-# Data analysis skill
-data = {{data}}
+# Load data
+df = pd.DataFrame({{data}})
 
-if isinstance(data, str):
-    try:
-        df = pd.read_json(data)
-    except:
-        df = pd.read_csv(io.StringIO(data))
-else:
-    df = pd.DataFrame(data)
-
-log("Data Shape: " + str(df.shape))
-log("\nColumns: " + str(list(df.columns)))
-log("\nFirst 5 rows:")
-display_table(df.head())
-log("\nDescriptive statistics:")
-display_table(df.describe())`
-      }]
-    })
-    
-    // Chart creation skill
-    this.registerSkill({
-      name: 'create_chart',
-      description: 'Create various types of charts from data',
-      content: `---\nname: create_chart\ndescription: Create various types of charts from data\n---\n\nUse this skill when you need to:\n- Create bar charts\n- Create line charts\n- Create pie charts\n- Create scatter plots\n- Visualize data relationships`,
-      instructions: `Use this skill when you need to:\n- Create bar charts\n- Create line charts\n- Create pie charts\n- Create scatter plots\n- Visualize data relationships`,
-      codeBlocks: [{
-        language: 'python',
-        code: `import matplotlib.pyplot as plt
-import pandas as pd
-
-# Chart creation skill
-data = {{data}}
-chart_type = "{{chart_type}}"
-title = "{{title}}"
-
-df = pd.DataFrame(data)
-plt.figure(figsize=(10, 6))
-
-if chart_type == "bar":
-    plt.bar(df.iloc[:, 0], df.iloc[:, 1])
-elif chart_type == "line":
-    plt.plot(df.iloc[:, 0], df.iloc[:, 1])
-elif chart_type == "pie":
-    plt.pie(df.iloc[:, 1], labels=df.iloc[:, 0], autopct='%1.1f%%')
-elif chart_type == "scatter":
-    plt.scatter(df.iloc[:, 0], df.iloc[:, 1])
-
-plt.title(title)
-plt.grid(True, alpha=0.3)
-display_chart()`
+# Perform analysis
+result = df.describe()
+log("Data Analysis Result:")
+log(result)
+`
       }]
     })
   }

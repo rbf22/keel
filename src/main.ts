@@ -437,44 +437,6 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
     logDiv.className = 'output-log';
     logDiv.textContent = output.message || '';
     targetEl.appendChild(logDiv);
-  } else if (output.type === 'table' && Array.isArray(output.data)) {
-    const container = document.createElement('div');
-    container.className = 'data-table-container';
-    const table = document.createElement('table');
-
-    if (output.data.length > 0) {
-      const keys = Object.keys(output.data[0] as Record<string, unknown>);
-      const thead = document.createElement('thead');
-      const headerRow = document.createElement('tr');
-      keys.forEach(key => {
-        const th = document.createElement('th');
-        th.textContent = key;
-        headerRow.appendChild(th);
-      });
-      thead.appendChild(headerRow);
-      table.appendChild(thead);
-
-      const tbody = document.createElement('tbody');
-      output.data.forEach((row: any) => {
-        const tr = document.createElement('tr');
-        keys.forEach(key => {
-          const td = document.createElement('td');
-          td.textContent = String((row as Record<string, unknown>)[key] ?? '');
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-    }
-    container.appendChild(table);
-    targetEl.appendChild(container);
-  } else if (output.type === 'chart' && typeof output.data === 'string') {
-    const img = document.createElement('img');
-    img.src = output.data;
-    img.className = 'chart-image';
-    img.style.maxWidth = '100%';
-    img.style.borderRadius = '4px';
-    targetEl.appendChild(img);
   } else if (output.type === 'error') {
     const errDiv = document.createElement('div');
     errDiv.className = 'output-error';

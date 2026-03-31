@@ -24,7 +24,7 @@ export interface AgentMemory {
 }
 
 export interface PythonOutput {
-  type: 'log' | 'table' | 'chart' | 'download' | 'error' | 'ready' | 'complete';
+  type: 'log' | 'download' | 'error' | 'ready' | 'complete';
   message?: string;
   data?: unknown;
   spec?: unknown;
@@ -32,7 +32,7 @@ export interface PythonOutput {
   content?: string;
 }
 
-export type ResponseType = 'text' | 'error' | 'plan' | 'observation' | 'token' | 'complete' | 'tool_call' | 'memory_added' | 'table' | 'chart';
+export type ResponseType = 'text' | 'error' | 'plan' | 'observation' | 'token' | 'complete' | 'tool_call' | 'memory_added';
 
 export interface AgentResponse {
   personaId: string;
