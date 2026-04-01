@@ -148,8 +148,8 @@ def create_math_plan(task_description, analysis):
             {
                 'step': 3,
                 'title': 'Execution',
-                'description': 'Execute the approved code with user inputs',
-                'skill': 'orchestrator',
+                'description': 'Execute the approved code with user inputs to get the final answer',
+                'skill': 'python-coding',
                 'inputs': ['approved_artifact', task_description],
                 'outputs': 'final_result'
             }
@@ -181,8 +181,8 @@ def create_general_plan(task_description, analysis):
             {
                 'step': 3,
                 'title': 'Execution',
-                'description': 'Execute the approved solution',
-                'skill': 'orchestrator',
+                'description': 'Execute the approved solution to get final result',
+                'skill': 'python-coding',
                 'inputs': ['approved_artifact', task_description],
                 'outputs': 'final_result'
             }
@@ -191,8 +191,30 @@ def create_general_plan(task_description, analysis):
 
 # Create and output the task plan
 plan = create_task_plan("""{{task}}""")
-print(json.dumps(plan, indent=2))
-log(f"Task plan created with {len(plan['steps'])} steps")
+
+# Convert to structured subtasks format for PlanExecutor
+structured_plan = {
+    "subtasks": []
+}
+
+for i, step in enumerate(plan['steps']):
+    subtask = {
+        "id": f"step_{i+1}",
+        "description": step['description'],
+        "requirements": [step['title']],
+        "assignedSkill": step['skill'],
+        "dependencies": [],
+        "successCriteria": step.get('success_criteria', f"Step {i+1} completed successfully")
+    }
+    
+    # Add dependencies (previous steps)
+    if i > 0:
+        subtask["dependencies"] = [f"step_{i}"]
+    
+    structured_plan["subtasks"].append(subtask)
+
+print(json.dumps(structured_plan, indent=2))
+log(f"Structured plan created with {len(structured_plan['subtasks'])} subtasks")
 ```
 
 ### Task Decomposition

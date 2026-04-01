@@ -80,50 +80,6 @@ export class ModelVerifier {
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     return hashHex;
   }
-
-  async verifyCachedModel(modelId: string): Promise<boolean> {
-    try {
-      const cacheKey = `web-llm-${modelId}`;
-      const cache = await caches.open(cacheKey);
-      const keys = await cache.keys();
-
-      if (keys.length === 0) {
-        return false; // No cached model
-      }
-
-      // Get all cached responses and combine them
-      const chunks: ArrayBuffer[] = [];
-      let totalSize = 0;
-
-      for (const request of keys) {
-        const response = await cache.match(request);
-        if (response) {
-          const chunk = await response.arrayBuffer();
-          chunks.push(chunk);
-          totalSize += chunk.byteLength;
-        }
-      }
-
-      // Combine chunks
-      const combinedBuffer = new ArrayBuffer(totalSize);
-      const combinedView = new Uint8Array(combinedBuffer);
-      let offset = 0;
-
-      for (const chunk of chunks) {
-        combinedView.set(new Uint8Array(chunk), offset);
-        offset += chunk.byteLength;
-      }
-
-      // Verify the combined model
-      return await this.verifyModel(modelId, combinedBuffer);
-    } catch (error) {
-      logger.error('llm', 'Failed to verify cached model', { 
-        modelId, 
-        error 
-      });
-      return false;
-    }
-  }
 }
 
 // Singleton instance

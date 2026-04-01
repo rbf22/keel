@@ -617,17 +617,6 @@ pre {
 
 #modelSelect option {
   padding: 4px 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-#modelSelect option.cached-model {
-  background-image: url('/icons/cached.png');
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  background-size: 16px 16px;
-  padding-right: 32px;
 }
 
 .status-ready {

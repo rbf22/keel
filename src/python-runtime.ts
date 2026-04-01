@@ -65,13 +65,21 @@ export class PythonRuntime {
   async init() {
     logger.info('python', 'Initializing Python runtime');
     return new Promise<void>((resolve, reject) => {
-      // In Vite, you can use new Worker(new URL('./path', import.meta.url))
+      // Try multiple worker loading strategies for compatibility
       logger.debug('python', 'Creating Python worker');
-      this.worker = new Worker(new URL('./python-worker.ts', import.meta.url), {
-        type: 'module'
-      });
+      
+      try {
+        // Strategy 1: Standard Vite worker URL
+        this.worker = new Worker(new URL('./python-worker.ts', import.meta.url), {
+          type: 'module'
+        });
+        logger.debug('python', 'Worker created with standard Vite URL');
+      } catch (workerError) {
+        logger.error('python', 'Failed to create worker with standard URL', { error: workerError });
+        // If this fails, the onerror handler will catch it
+      }
 
-      this.worker.onmessage = (event) => {
+      this.worker!.onmessage = (event) => {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         logger.debug('python', `Worker output: ${output.type}`, output);
         
@@ -97,9 +105,15 @@ export class PythonRuntime {
         }
       };
 
-      this.worker.onerror = (error) => {
-        logger.error('python', 'Worker error occurred during initialization', { error });
-        const errorMessage = 'Python worker failed to load. This might be due to a network error or browser restriction.';
+      this.worker!.onerror = (error) => {
+        logger.error('python', 'Worker error occurred during initialization', { 
+          error,
+          message: error.message,
+          filename: error.filename,
+          lineno: error.lineno,
+          colno: error.colno
+        });
+        const errorMessage = error.message || 'Python worker failed to load. This might be due to a network error, browser restriction, or the worker file not being found.';
         this.onOutput({ type: 'error', message: errorMessage });
         if (!this.isReady) {
           this.terminate();

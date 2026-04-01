@@ -21,7 +21,7 @@ describe('LLM Diagnostic Configuration', () => {
   })
 
   it('should have custom model list with valid dynamic URLs', () => {
-    expect(CUSTOM_MODEL_LIST.length).toBe(5)
+    expect(CUSTOM_MODEL_LIST.length).toBe(6)
     
     CUSTOM_MODEL_LIST.forEach(m => {
       // Verify WASM URL construction

@@ -1,18 +1,34 @@
 import * as webllm from "@mlc-ai/web-llm";
 import { logger } from "./logger"
-import { MODEL_VRAM_THRESHOLDS, LLM_GENERATION_DELAY } from "./constants"
+import { 
+  MODEL_VRAM_THRESHOLDS, 
+  LLM_GENERATION_DELAY,
+  LLM_ENGINE_INIT_TIMEOUT,
+  LLM_ABSOLUTE_TIMEOUT
+} from "./constants"
 // import { modelVerifier } from "./utils/model-verification";
+
+// Track cached model sizes reported by WebLLM during loading
+const cachedModelSizes = new Map<string, number>();
+
+export function getCachedModelSizeFromWebLLM(modelId: string): number {
+  return cachedModelSizes.get(modelId) || 0;
+}
+
+export function setCachedModelSizeFromWebLLM(modelId: string, sizeBytes: number): void {
+  cachedModelSizes.set(modelId, sizeBytes);
+}
 
 // Default model ID - using SmolLM2 as it's the smallest and most compatible
 const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
 
 export async function checkWebGPU() {
   logger.debug('llm', 'Checking WebGPU support');
-  if (!(navigator as unknown as { gpu?: GPU }).gpu) {
+  if (!(navigator as any).gpu) {
     logger.error('llm', 'WebGPU not supported on this browser');
     throw new Error("WebGPU is not supported on this browser.");
   }
-  const adapter = await (navigator as unknown as { gpu: GPU }).gpu.requestAdapter();
+  const adapter = await (navigator as any).gpu.requestAdapter();
   if (!adapter) {
     logger.error('llm', 'WebGPU adapter not found');
     throw new Error("WebGPU adapter not found.");
@@ -27,8 +43,8 @@ export async function checkWebGPU() {
 export async function detectBestModel(): Promise<string> {
   logger.info('llm', 'Starting best model detection');
   try {
-    const memory = (navigator as unknown as { deviceMemory?: number }).deviceMemory; // in GB
-    const gpu = (navigator as unknown as { gpu?: GPU }).gpu;
+    const memory = (navigator as any).deviceMemory; // in GB
+    const gpu = (navigator as any).gpu;
     if (!gpu) {
       logger.warn('llm', 'No GPU available, using default model');
       return DEFAULT_MODEL_ID;
@@ -138,6 +154,19 @@ export interface ModelInfo {
 // Custom model configuration to handle potential fetch failures from default CDNs
 export const CUSTOM_MODEL_LIST: (webllm.ModelRecord & { recommended_config?: ModelInfo['recommendedConfig'] })[] = [
   {
+    model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
+    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/",
+    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+    vram_required_MB: 376.06,
+    low_resource_required: true,
+    required_features: ["shader-f16"],
+    recommended_config: {
+      temperature: 0.7,
+      top_p: 0.9,
+      repetition_penalty: 1.0
+    }
+  },
+  {
     model_id: "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC", 
     model: "https://huggingface.co/mlc-ai/TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC/resolve/main/",
     model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/TinyLlama-1.1B-Chat-v0.4-q4f16_1-ctx4k_cs1k-webgpu.wasm",
@@ -217,23 +246,23 @@ export const CUSTOM_APP_CONFIG: webllm.AppConfig = {
     ...webllm.prebuiltAppConfig.model_list.filter(m => !CUSTOM_MODEL_LIST.some(cm => cm.model_id === m.model_id)),
     ...CUSTOM_MODEL_LIST
   ],
-  useIndexedDBCache: true,  // Re-enabled - bug fixed with patch
+  useIndexedDBCache: true,
 };
 
-// Map web-llm prebuilt models to our ModelInfo format
-export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_APP_CONFIG.model_list.map(m => ({
+// Map our custom models to the ModelInfo format for the UI
+export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_MODEL_LIST.map(m => ({
   modelId: m.model_id,
   displayName: m.model_id.split('-MLC')[0].replace(/-/g, ' '),
   vramRequiredMB: m.vram_required_MB,
   requiredFeatures: m.required_features,
-  recommendedConfig: (CUSTOM_MODEL_LIST.find(cm => cm.model_id === m.model_id) as any)?.recommended_config || {
+  recommendedConfig: m.recommended_config || {
     temperature: 0.7,
     top_p: 0.9,
     repetition_penalty: 1.0,
     presence_penalty: 0.0,
     frequency_penalty: 0.0
   }
-})).filter(m => m.modelId.includes('SmolLM2') || m.modelId.includes('Llama-3.2-1B') || m.modelId.includes('TinyLlama'));
+}));
 
 // Cache sorted model list for performance
 let sortedModelList: typeof SUPPORTED_MODELS | null = null;
@@ -301,10 +330,14 @@ export function mapError(err: unknown, modelId: string): string {
 }
 
 export class LocalLLMEngine implements ILLMEngine {
-  private engine: webllm.ServiceWorkerMLCEngine | webllm.MLCEngine | null = null;
+  private engine: webllm.MLCEngine | null = null;
   private onUpdate: (message: string) => void;
   private modelId: string;
   private isGenerating = false;
+  
+  // Timeout properties
+  private engineInitTimeout = LLM_ENGINE_INIT_TIMEOUT;
+  private absoluteTimeout = LLM_ABSOLUTE_TIMEOUT;
 
   constructor(modelId: string, onUpdate: (message: string) => void) {
     this.modelId = modelId;
@@ -312,53 +345,51 @@ export class LocalLLMEngine implements ILLMEngine {
     logger.info("llm", `LocalLLMEngine initialized with Service Worker`);
   }
 
-  // Check if model is cached
+  // Check if model is cached in IndexedDB
   async isModelCached(): Promise<boolean> {
-    logger.info("llm", "[CACHE] Starting cache check", { modelId: this.modelId });
+    logger.info("llm", "[CACHE] Starting IndexedDB cache check", { modelId: this.modelId });
     
     try {
-      // Use WebLLM's built-in cache checking
-      const cacheKey = `web-llm-${this.modelId}`;
-      logger.debug("llm", "[CACHE] Opening cache", { cacheKey });
+      // WebLLM stores model data in IndexedDB with database name pattern: webllm:${modelId}
+      const dbName = `webllm:${this.modelId}`;
+      logger.debug("llm", "[CACHE] Checking IndexedDB database", { dbName });
       
-      const cache = await caches.open(cacheKey);
-      const modelUrl = this.getModelUrl();
-      
-      logger.debug("llm", "[CACHE] Checking for model in cache", { 
-        modelUrl,
-        cacheKey 
+      return new Promise((resolve) => {
+        const request = indexedDB.open(dbName);
+        
+        request.onsuccess = () => {
+          const db = request.result;
+          const hasStores = db.objectStoreNames.length > 0;
+          db.close();
+          
+          logger.info("llm", "[CACHE] IndexedDB check complete", {
+            modelId: this.modelId,
+            dbName,
+            isCached: hasStores,
+            storeCount: db.objectStoreNames.length
+          });
+          
+          resolve(hasStores);
+        };
+        
+        request.onerror = () => {
+          logger.debug("llm", "[CACHE] Failed to open IndexedDB (model not cached)", { dbName });
+          resolve(false);
+        };
+        
+        request.onupgradeneeded = (event) => {
+          // Database doesn't exist, model is not cached
+          const db = (event.target as IDBOpenDBRequest).result;
+          db.close();
+          logger.debug("llm", "[CACHE] IndexedDB doesn't exist (model not cached)", { dbName });
+        };
+        
+        // Timeout in case IndexedDB hangs
+        setTimeout(() => {
+          logger.debug("llm", "[CACHE] IndexedDB check timed out", { dbName });
+          resolve(false);
+        }, 2000);
       });
-      
-      // Check all keys in cache to detect empty caches
-      const allKeys = await cache.keys();
-      logger.debug("llm", "[CACHE] Total cache keys", { 
-        keyCount: allKeys.length,
-        keys: allKeys.map(k => k.url)
-      });
-      
-      // If cache exists but has no keys, it's an empty cache
-      if (allKeys.length === 0) {
-        logger.warn("llm", "[CACHE] Empty cache detected", {
-          modelId: this.modelId,
-          cacheKey,
-          message: "Cache exists but contains no data"
-        });
-        return false;
-      }
-      
-      const modelResponse = await cache.match(modelUrl);
-      const isCached = modelResponse !== undefined;
-      
-      logger.info("llm", "[CACHE] Cache check complete", {
-        modelId: this.modelId,
-        isCached,
-        modelUrl,
-        hasResponse: !!modelResponse,
-        responseStatus: modelResponse?.status,
-        totalKeys: allKeys.length
-      });
-      
-      return isCached;
     } catch (error) {
       logger.error("llm", "[CACHE] Failed to check model cache", { 
         error, 
@@ -368,49 +399,33 @@ export class LocalLLMEngine implements ILLMEngine {
     }
   }
 
-  // Get cached model size
+  // Get cached model size from IndexedDB or WebLLM tracked size
   async getCachedModelSize(): Promise<number> {
     logger.info("llm", "[CACHE] Getting cached model size", { modelId: this.modelId });
     
-    try {
-      const cacheKey = `web-llm-${this.modelId}`;
-      logger.debug("llm", "[CACHE] Opening cache for size check", { cacheKey });
-      
-      const cache = await caches.open(cacheKey);
-      const keys = await cache.keys();
-      
-      logger.debug("llm", "[CACHE] Found cache entries", { 
-        entryCount: keys.length,
-        modelId: this.modelId 
-      });
-      
-      let totalSize = 0;
-      const sizes: Array<{url: string, size: number}> = [];
-      
-      for (const request of keys) {
-        const response = await cache.match(request);
-        if (response) {
-          const blob = await response.blob();
-          const size = blob.size;
-          totalSize += size;
-          sizes.push({ url: request.url, size });
-          
-          logger.debug("llm", "[CACHE] Entry size", {
-            url: request.url,
-            size,
-            sizeMB: (size / 1024 / 1024).toFixed(2)
-          });
-        }
-      }
-      
-      logger.info("llm", "[CACHE] Total cached size calculated", {
+    // First check WebLLM-tracked size (captured during loading)
+    const webllmSize = getCachedModelSizeFromWebLLM(this.modelId);
+    if (webllmSize > 0) {
+      logger.info("llm", "[CACHE] Using WebLLM-tracked size", {
         modelId: this.modelId,
-        totalSize,
-        totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
-        entryCount: sizes.length
+        size: webllmSize,
+        sizeMB: (webllmSize / 1024 / 1024).toFixed(2)
+      });
+      return webllmSize;
+    }
+    
+    // Fall back to IndexedDB size calculation
+    try {
+      const dbName = `webllm:${this.modelId}`;
+      const size = await this.getIndexedDBModelSize(dbName);
+      
+      logger.info("llm", "[CACHE] IndexedDB size calculated", {
+        modelId: this.modelId,
+        totalSize: size,
+        totalSizeMB: (size / 1024 / 1024).toFixed(2)
       });
       
-      return totalSize;
+      return size;
     } catch (error) {
       logger.error("llm", "[CACHE] Failed to get cached model size", { 
         error, 
@@ -421,12 +436,128 @@ export class LocalLLMEngine implements ILLMEngine {
     }
   }
 
-  // Clear cached model
+  // Get model size from WebLLM's IndexedDB storage
+  private async getIndexedDBModelSize(dbName: string): Promise<number> {
+    try {
+      return new Promise((resolve) => {
+        const request = indexedDB.open(dbName);
+        
+        request.onsuccess = () => {
+          const db = request.result;
+          const storeNames = Array.from(db.objectStoreNames);
+          
+          logger.debug("llm", "[CACHE] IndexedDB stores found", { 
+            dbName,
+            storeCount: storeNames.length 
+          });
+          
+          if (storeNames.length === 0) {
+            db.close();
+            resolve(0);
+            return;
+          }
+          
+          // Helper to recursively calculate size of nested objects
+          const calculateSize = (value: unknown): number => {
+            if (value === null || value === undefined) return 0;
+            
+            if (value instanceof ArrayBuffer) {
+              return value.byteLength;
+            }
+            
+            if (ArrayBuffer.isView(value)) {
+              return value.byteLength;
+            }
+            
+            if (typeof value === 'string') {
+              return value.length * 2;
+            }
+            
+            if (typeof value === 'number') {
+              return 8;
+            }
+            
+            if (typeof value === 'boolean') {
+              return 4;
+            }
+            
+            if (Array.isArray(value)) {
+              return value.reduce((sum, item) => sum + calculateSize(item), 0);
+            }
+            
+            if (typeof value === 'object') {
+              let size = 0;
+              for (const key in value as Record<string, unknown>) {
+                if (Object.prototype.hasOwnProperty.call(value, key)) {
+                  size += key.length * 2;
+                  size += calculateSize((value as Record<string, unknown>)[key]);
+                }
+              }
+              return size;
+            }
+            
+            return 0;
+          };
+          
+          const checkStore = (storeName: string) => {
+            return new Promise<number>((storeResolve) => {
+              try {
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                let storeSize = 0;
+                const cursorRequest = store.openCursor();
+                
+                cursorRequest.onsuccess = (event) => {
+                  const cursor = (event.target as IDBRequest).result;
+                  if (cursor) {
+                    storeSize += calculateSize(cursor.value);
+                    cursor.continue();
+                  } else {
+                    logger.debug("llm", "[CACHE] IndexedDB store size", { 
+                      storeName,
+                      size: storeSize,
+                      sizeMB: (storeSize / 1024 / 1024).toFixed(2)
+                    });
+                    storeResolve(storeSize);
+                  }
+                };
+                
+                cursorRequest.onerror = () => storeResolve(0);
+              } catch (e) {
+                storeResolve(0);
+              }
+            });
+          };
+          
+          Promise.all(storeNames.map(checkStore)).then((sizes) => {
+            const totalSize = sizes.reduce((sum, s) => sum + s, 0);
+            db.close();
+            resolve(totalSize);
+          }).catch(() => {
+            db.close();
+            resolve(0);
+          });
+        };
+        
+        request.onerror = () => {
+          logger.debug("llm", "[CACHE] Failed to open IndexedDB", { dbName });
+          resolve(0);
+        };
+        
+        setTimeout(() => resolve(0), 5000);
+      });
+    } catch (error) {
+      logger.debug("llm", "[CACHE] Error checking IndexedDB", { error });
+      return 0;
+    }
+  }
+
+  // Clear cached model from IndexedDB
   async clearCachedModel(): Promise<void> {
     try {
-      const cacheKey = `web-llm-${this.modelId}`;
-      await caches.delete(cacheKey);
-      logger.info("llm", `Cleared cached model: ${this.modelId}`);
+      const dbName = `webllm:${this.modelId}`;
+      await indexedDB.deleteDatabase(dbName);
+      logger.info("llm", `Cleared cached model from IndexedDB: ${this.modelId}`);
     } catch (error) {
       logger.error("llm", "Failed to clear cached model", { error, modelId: this.modelId });
       throw error;
@@ -437,93 +568,91 @@ export class LocalLLMEngine implements ILLMEngine {
   async clearCorruptedModelAndRetry(): Promise<void> {
     logger.warn("llm", "Clearing potentially corrupted model cache", { modelId: this.modelId });
     await this.clearCachedModel();
-    // Also clear any IndexedDB data for this model
+    // Also clear any other IndexedDB databases for this model
     try {
       if (typeof indexedDB !== 'undefined') {
-        const databases = await indexedDB.databases();
-        const webLLmDBs = databases.filter(db => db.name && db.name.includes('web-llm'));
-        for (const db of webLLmDBs) {
-          if (db.name) {
-            await indexedDB.deleteDatabase(db.name);
-            logger.info("llm", `Deleted IndexedDB: ${db.name}`);
-          }
-        }
+        const dbName = `webllm:${this.modelId}`;
+        await indexedDB.deleteDatabase(dbName);
+        logger.info("llm", `Deleted IndexedDB for model: ${this.modelId}`);
       }
     } catch (error) {
       logger.warn("llm", "Failed to clear IndexedDB", { error });
     }
   }
 
-  // Clear all cached models
+  // Clear all cached models from IndexedDB
   static async clearAllCachedModels(): Promise<void> {
     try {
-      const cacheNames = await caches.keys();
-      const webLLmCacheNames = cacheNames.filter(name => name.startsWith('web-llm-'));
-      
-      for (const cacheName of webLLmCacheNames) {
-        await caches.delete(cacheName);
+      if (typeof indexedDB === 'undefined') {
+        logger.warn("llm", "IndexedDB not available");
+        return;
       }
       
-      logger.info("llm", `Cleared ${webLLmCacheNames.length} cached model(s)`);
+      const databases = await indexedDB.databases();
+      const webLLmDBs = databases.filter(db => db.name && db.name.startsWith('webllm:'));
+      
+      for (const db of webLLmDBs) {
+        if (db.name) {
+          await indexedDB.deleteDatabase(db.name);
+          logger.info("llm", `Deleted IndexedDB: ${db.name}`);
+        }
+      }
+      
+      logger.info("llm", `Cleared ${webLLmDBs.length} cached model(s) from IndexedDB`);
     } catch (error) {
       logger.error("llm", "Failed to clear all cached models", { error });
       throw error;
     }
   }
 
-  // Get all cached models info
+  // Get all cached models info from IndexedDB
   static async getAllCachedModels(): Promise<Array<{modelId: string, size: number, isCorrupted?: boolean, isEmpty?: boolean}>> {
     try {
-      const cacheNames = await caches.keys();
-      const webLLmCacheNames = cacheNames.filter(name => name.startsWith('web-llm-'));
+      if (typeof indexedDB === 'undefined') {
+        logger.warn("llm", "IndexedDB not available");
+        return [];
+      }
+      
+      const databases = await indexedDB.databases();
+      const webLLmDBs = databases.filter(db => db.name && db.name.startsWith('webllm:'));
       const models = [];
       
-      logger.info("llm", "Checking cached models", {
-        totalCacheNames: cacheNames.length,
-        webLLmCacheNames: webLLmCacheNames.length,
-        allCacheNames: cacheNames
+      logger.info("llm", "Checking cached models in IndexedDB", {
+        totalDatabases: databases.length,
+        webLLmDatabases: webLLmDBs.length
       });
       
-      for (const cacheName of webLLmCacheNames) {
-        const modelId = cacheName.replace('web-llm-', '');
-        const cache = await caches.open(cacheName);
-        const keys = await cache.keys();
-        let totalSize = 0;
+      for (const dbInfo of webLLmDBs) {
+        const dbName = dbInfo.name!;
+        const modelId = dbName.replace('webllm:', '');
         
-        logger.info("llm", "Checking model cache", {
+        logger.info("llm", "Checking model in IndexedDB", {
           modelId,
-          cacheName,
-          keyCount: keys.length,
-          keys: keys.map(k => k.url)
+          dbName
         });
         
-        for (const request of keys) {
-          const response = await cache.match(request);
-          if (response) {
-            const blob = await response.blob();
-            totalSize += blob.size;
-            logger.debug("llm", "Cache entry", {
-              modelId,
-              url: request.url,
-              size: blob.size,
-              type: blob.type
-            });
-          }
+        // Get size - first check WebLLM-tracked size, then fall back to IndexedDB
+        let size = getCachedModelSizeFromWebLLM(modelId);
+        if (size === 0) {
+          size = await LocalLLMEngine.getIndexedDBSizeStatic(dbName);
+        } else {
+          logger.debug("llm", "[CACHE] Using WebLLM-tracked size", { modelId, size });
         }
         
-        // Mark as corrupted if size is less than 1MB (models are >1GB) OR if cache is empty
-        const isCorrupted = (totalSize > 0 && totalSize < 1024 * 1024) || (keys.length === 0);
-        const isEmpty = keys.length === 0;
+        // A model is corrupted if it has very small size (>0 but < 1MB)
+        // Empty means 0 size or couldn't read
+        const isCorrupted = size > 0 && size < 1024 * 1024;
+        const isEmpty = size === 0;
         
         logger.info("llm", "Model cache summary", {
           modelId,
-          totalSize,
-          totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
+          totalSize: size,
+          totalSizeMB: (size / 1024 / 1024).toFixed(2),
           isCorrupted,
-          keyCount: keys.length
+          isEmpty
         });
         
-        models.push({ modelId, size: totalSize, isCorrupted, isEmpty });
+        models.push({ modelId, size, isCorrupted, isEmpty });
       }
       
       return models;
@@ -533,62 +662,125 @@ export class LocalLLMEngine implements ILLMEngine {
     }
   }
 
-  private getModelUrl(): string {
-    // First check custom model list
-    const model = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
-    if (model?.model_lib) {
-      logger.info("llm", "Found model in CUSTOM_MODEL_LIST", {
-        modelId: this.modelId,
-        modelUrl: model.model_lib,
-        hasModelUrl: !!model.model,
-        modelUrlPrefix: model.model
-      });
-      return model.model_lib;
-    }
-    
-    // If not found, check WebLLM's default model list
-    const webllmModel = webllm.prebuiltAppConfig.model_list.find(m => m.model_id === this.modelId);
-    if (webllmModel?.model_lib) {
-      logger.info("llm", "Found model in WebLLM default list", {
-        modelId: this.modelId,
-        modelUrl: webllmModel.model_lib,
-        hasModelUrl: !!webllmModel.model,
-        modelUrlPrefix: webllmModel.model
-      });
-      return webllmModel.model_lib;
-    }
-    
-    logger.error("llm", "Model not found in any model list", { 
-      modelId: this.modelId,
-      customModelIds: CUSTOM_MODEL_LIST.map(m => m.model_id),
-      webllmModelIds: webllm.prebuiltAppConfig.model_list.slice(0, 5).map(m => m.model_id),
-      totalWebllmModels: webllm.prebuiltAppConfig.model_list.length
+  // Static helper to get IndexedDB size for getAllCachedModels
+  private static async getIndexedDBSizeStatic(dbName: string): Promise<number> {
+    return new Promise((resolve) => {
+      const request = indexedDB.open(dbName);
+      
+      request.onsuccess = () => {
+        const db = request.result;
+        const storeNames = Array.from(db.objectStoreNames);
+        
+        logger.debug("llm", "[CACHE] IndexedDB opened", { 
+          dbName,
+          storeNames,
+          storeCount: storeNames.length 
+        });
+        
+        if (storeNames.length === 0) {
+          db.close();
+          resolve(0);
+          return;
+        }
+        
+        // Helper to recursively calculate size of nested objects
+        const calculateSize = (value: unknown): number => {
+          if (value === null || value === undefined) return 0;
+          
+          if (value instanceof ArrayBuffer) {
+            return value.byteLength;
+          }
+          
+          if (ArrayBuffer.isView(value)) {
+            return value.byteLength;
+          }
+          
+          if (typeof value === 'string') {
+            return value.length * 2; // UTF-16 roughly
+          }
+          
+          if (typeof value === 'number') {
+            return 8;
+          }
+          
+          if (typeof value === 'boolean') {
+            return 4;
+          }
+          
+          if (Array.isArray(value)) {
+            return value.reduce((sum, item) => sum + calculateSize(item), 0);
+          }
+          
+          if (typeof value === 'object') {
+            let size = 0;
+            for (const key in value as Record<string, unknown>) {
+              if (Object.prototype.hasOwnProperty.call(value, key)) {
+                size += key.length * 2; // key size
+                size += calculateSize((value as Record<string, unknown>)[key]);
+              }
+            }
+            return size;
+          }
+          
+          return 0;
+        };
+        
+        const checkStore = (storeName: string) => {
+          return new Promise<number>((storeResolve) => {
+            try {
+              const transaction = db.transaction([storeName], 'readonly');
+              const store = transaction.objectStore(storeName);
+              let storeSize = 0;
+              const cursorRequest = store.openCursor();
+              
+              cursorRequest.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                  const value = cursor.value;
+                  // Log first few entries for debugging
+                  if (storeSize === 0) {
+                    logger.debug("llm", "[CACHE] First entry sample", { 
+                      storeName,
+                      valueType: typeof value,
+                      isArray: Array.isArray(value),
+                      isArrayBuffer: value instanceof ArrayBuffer,
+                      keys: value && typeof value === 'object' ? Object.keys(value).slice(0, 5) : null
+                    });
+                  }
+                  storeSize += calculateSize(value);
+                  cursor.continue();
+                } else {
+                  storeResolve(storeSize);
+                }
+              };
+              
+              cursorRequest.onerror = () => storeResolve(0);
+            } catch (e) {
+              storeResolve(0);
+            }
+          });
+        };
+        
+        Promise.all(storeNames.map(checkStore)).then((sizes) => {
+          const totalSize = sizes.reduce((sum, s) => sum + s, 0);
+          logger.debug("llm", "[CACHE] Total size calculated", { 
+            dbName,
+            totalSize,
+            totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
+            storeSizes: sizes
+          });
+          db.close();
+          resolve(totalSize);
+        }).catch((err) => {
+          logger.error("llm", "[CACHE] Error calculating size", { dbName, error: err });
+          db.close();
+          resolve(0);
+        });
+      };
+      
+      request.onerror = () => resolve(0);
+      setTimeout(() => resolve(0), 5000);
     });
-    return '';
-  }
-
-  // Add URL validation
-  private async validateUrl(url: string): Promise<boolean> {
-    try {
-      logger.info("llm", "Validating URL", { url });
-      const response = await fetch(url, { method: 'HEAD' });
-      const isValid = response.ok;
-      logger.info("llm", "URL validation result", {
-        url,
-        status: response.status,
-        statusText: response.statusText,
-        isValid,
-        contentLength: response.headers.get('content-length'),
-        contentType: response.headers.get('content-type')
-      });
-      return isValid;
-    } catch (error) {
-      logger.error("llm", "URL validation failed", {
-        url,
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return false;
-    }
   }
 
   async init() {
@@ -598,1568 +790,143 @@ export class LocalLLMEngine implements ILLMEngine {
     });
     
     this.onUpdate("Checking WebGPU...");
-    await checkWebGPU();
-    
-    // Add comprehensive validation and debugging
-    logger.info("llm", "[ENGINE] Starting comprehensive validation", {
-      modelId: this.modelId,
-      timestamp: new Date().toISOString()
-    });
-    
-    // 1. Validate ServiceWorker state
-    if (!navigator.serviceWorker) {
-      throw new Error("ServiceWorker API not available");
+    logger.debug("llm", "Starting WebGPU check");
+    try {
+      await checkWebGPU();
+      logger.info("llm", "WebGPU check passed");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.onUpdate(`❌ WebGPU Error: ${msg}`);
+      throw error;
     }
     
-    if (!navigator.serviceWorker.controller) {
-      throw new Error("No active ServiceWorker controller");
+    // Validate ServiceWorker
+    logger.debug("llm", "Checking ServiceWorker availability");
+    if (typeof navigator !== 'undefined' && !navigator.serviceWorker) {
+      logger.warn("llm", "ServiceWorker API not available in this environment");
+      const isTest = typeof window !== 'undefined' && (window as any).__vitest_worker__;
+      if (!isTest) {
+        throw new Error("ServiceWorker API not available");
+      }
     }
     
-    logger.info("llm", "[ENGINE] ServiceWorker validation passed", {
-      controller: navigator.serviceWorker.controller.scriptURL,
-      state: (navigator.serviceWorker.controller as any).state
-    });
-    
-    // 2. Validate WebGPU again
-    if (!navigator.gpu) {
-      throw new Error("WebGPU not available");
+    if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
+      logger.debug("llm", "Waiting for ServiceWorker to be ready");
+      const registration = await navigator.serviceWorker.ready;
+      logger.info("llm", "ServiceWorker ready", { scope: registration.scope });
+      if (!navigator.serviceWorker.controller) {
+        this.onUpdate("Activating Service Worker...");
+        registration.active?.postMessage({ type: 'claim' });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (!navigator.serviceWorker.controller) {
+          logger.warn("llm", "ServiceWorker not controlling page after activation attempt");
+        }
+      }
     }
     
-    // 3. Check if model exists in our config
+    // Check if model exists in our config
+    logger.debug("llm", "Checking if model exists in config", { modelId: this.modelId });
     const modelInConfig = CUSTOM_APP_CONFIG.model_list.find(m => m.model_id === this.modelId);
     if (!modelInConfig) {
       throw new Error(`Model ${this.modelId} not found in app config`);
     }
+    logger.info("llm", "Model found in config", { modelId: this.modelId });
     
-    logger.info("llm", "[ENGINE] Model config validation passed", {
-      modelId: this.modelId,
-      hasModelLib: !!modelInConfig.model_lib,
-      hasModelUrl: !!modelInConfig.model,
-      vramRequired: modelInConfig.vram_required_MB,
-      requiredFeatures: modelInConfig.required_features
-    });
-    
-    // 4. Set up ServiceWorker message listener BEFORE initialization
-    logger.info("llm", "[ENGINE] Setting up ServiceWorker message listener", {
-      modelId: this.modelId
-    });
-    
-    const messageHandler = (event: MessageEvent) => {
-      logger.info("llm", "[ENGINE] Received ServiceWorker message", {
-        modelId: this.modelId,
-        data: event.data,
-        dataType: typeof event.data,
-        dataKeys: event.data ? Object.keys(event.data) : null,
-        timestamp: new Date().toISOString()
-      });
-    };
-    
-    navigator.serviceWorker.addEventListener('message', messageHandler);
-    
-    // 5. Check ServiceWorker readiness with timeout
-    logger.info("llm", "[ENGINE] Checking ServiceWorker readiness");
-    const swReady = await Promise.race([
-      (navigator.serviceWorker.controller as any).ready || Promise.resolve(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("ServiceWorker ready timeout")), 5000))
-    ]);
-    
-    logger.info("llm", "[ENGINE] ServiceWorker is ready", { swReady });
-    
-    // 6. Add fetch interception monitoring
-    let fetchCount = 0;
-    const originalFetch = window.fetch;
-    window.fetch = function(...args) {
-      fetchCount++;
-      const url = args[0] as string;
-      if (url.includes('web-llm-models') || url.includes('SmolLM2') || url.includes('mlc-ai')) {
-        logger.info("llm", "[ENGINE] Model-related fetch detected", {
-          modelId: "SmolLM2-135M-Instruct-q0f16-MLC",
-          url,
-          fetchCount,
-          timestamp: new Date().toISOString()
-        });
-      }
-      return originalFetch.apply(this, args);
-    };
-    
-    // 7. Validate browser environment
-    logger.info("llm", "[ENGINE] Validating browser environment");
-    const browserInfo = {
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      language: navigator.language,
-      cookieEnabled: navigator.cookieEnabled,
-      onLine: navigator.onLine,
-      hardwareConcurrency: navigator.hardwareConcurrency,
-      deviceMemory: (navigator as any).deviceMemory,
-      webgl: !!document.createElement('canvas').getContext('webgl'),
-      webgl2: !!document.createElement('canvas').getContext('webgl2')
-    };
-    logger.info("llm", "[ENGINE] Browser info", browserInfo);
-    
-    // 8. Validate storage availability
-    logger.info("llm", "[ENGINE] Validating storage availability");
-    try {
-      const testKey = 'web-llm-test-' + Date.now();
-      await caches.open(testKey);
-      await caches.delete(testKey);
-      logger.info("llm", "[ENGINE] Cache API is working");
-    } catch (error) {
-      throw new Error(`Cache API not available: ${error}`);
-    }
-    
-    try {
-      const testDB = 'test-db-' + Date.now();
-      const request = indexedDB.open(testDB, 1);
-      await new Promise((resolve, reject) => {
-        request.onsuccess = () => {
-          indexedDB.deleteDatabase(testDB);
-          resolve(true);
-        };
-        request.onerror = () => reject(request.error);
-      });
-      logger.info("llm", "[ENGINE] IndexedDB is working");
-    } catch (error) {
-      throw new Error(`IndexedDB not available: ${error}`);
-    }
-    
-    // 9. Validate WebLLM library
-    logger.info("llm", "[ENGINE] Validating WebLLM library");
-    if (typeof webllm === 'undefined') {
-      throw new Error("WebLLM library not loaded");
-    }
-    
-    const webllmInfo = {
-      hasCreateMLCEngine: typeof webllm.CreateMLCEngine === 'function',
-      hasCreateServiceWorkerMLCEngine: typeof webllm.CreateServiceWorkerMLCEngine === 'function',
-      hasPrebuiltAppConfig: !!webllm.prebuiltAppConfig,
-      modelLibURLPrefix: webllm.modelLibURLPrefix,
-      modelVersion: webllm.modelVersion,
-      prebuiltModelCount: webllm.prebuiltAppConfig?.model_list?.length || 0
-    };
-    logger.info("llm", "[ENGINE] WebLLM info", webllmInfo);
-    
-    // 10. Validate ServiceWorker handler directly
-    logger.info("llm", "[ENGINE] Inspecting ServiceWorker handler");
-    try {
-      // Send a test message to verify communication
-      const testMessage = {
-        kind: "test",
-        uuid: "test-" + Date.now(),
-        content: { test: true }
-      };
-      
-      const messageChannel = new MessageChannel();
-      const responsePromise = new Promise((resolve, reject) => {
-        messageChannel.port1.onmessage = (event) => {
-          logger.info("llm", "[ENGINE] Test message response", {
-            response: event.data,
-            timestamp: new Date().toISOString()
-          });
-          resolve(event.data);
-        };
-        setTimeout(() => reject(new Error("Test message timeout")), 3000);
-      });
-      
-      navigator.serviceWorker.controller!.postMessage(testMessage, [messageChannel.port2]);
-      logger.info("llm", "[ENGINE] Test message sent");
-      
-      try {
-        await responsePromise;
-        logger.info("llm", "[ENGINE] ServiceWorker communication verified");
-      } catch (error) {
-        logger.warn("llm", "[ENGINE] ServiceWorker test failed", { error });
-      }
-    } catch (error) {
-      logger.error("llm", "[ENGINE] ServiceWorker inspection failed", { error });
-    }
-    
-    // 11. Check for existing model caches that might be corrupted
-    logger.info("llm", "[ENGINE] Checking for existing problematic caches");
-    const allCacheNames = await caches.keys();
-    const modelCaches = allCacheNames.filter(name => name.startsWith('web-llm-'));
-    logger.info("llm", "[ENGINE] Found model caches", {
-      totalCaches: allCacheNames.length,
-      modelCaches: modelCaches.length,
-      cacheNames: modelCaches
-    });
-    
-    // 12. Validate network connectivity to model hosts
-    logger.info("llm", "[ENGINE] Testing network connectivity");
-    try {
-      const connectivityTest = await fetch('https://huggingface.co/', { 
-        method: 'HEAD',
-        mode: 'no-cors'
-      });
-      logger.info("llm", "[ENGINE] HuggingFace connectivity", {
-        status: connectivityTest.type,
-        ok: connectivityTest.ok
-      });
-    } catch (error) {
-      logger.warn("llm", "[ENGINE] HuggingFace connectivity test failed", { 
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-    
-    try {
-      const githubTest = await fetch('https://raw.githubusercontent.com/', { 
-        method: 'HEAD',
-        mode: 'no-cors'
-      });
-      logger.info("llm", "[ENGINE] GitHub connectivity", {
-        status: githubTest.type,
-        ok: githubTest.ok
-      });
-    } catch (error) {
-      logger.warn("llm", "[ENGINE] GitHub connectivity test failed", { 
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-    
-    // 13. Validate memory constraints
-    logger.info("llm", "[ENGINE] Validating memory constraints");
-    const memoryInfo = {
-      jsHeapSizeLimit: (performance as any).memory?.jsHeapSizeLimit,
-      totalJSHeapSize: (performance as any).memory?.totalJSHeapSize,
-      usedJSHeapSize: (performance as any).memory?.usedJSHeapSize,
-      deviceMemory: (navigator as any).deviceMemory,
-      hardwareConcurrency: navigator.hardwareConcurrency
-    };
-    logger.info("llm", "[ENGINE] Memory info", memoryInfo);
-    
-    if ((performance as any).memory?.jsHeapSizeLimit < 1024 * 1024 * 1024) { // Less than 1GB
-      logger.warn("llm", "[ENGINE] Low heap size limit detected", {
-        limit: (performance as any).memory?.jsHeapSizeLimit,
-        recommended: "At least 1GB"
-      });
-    }
-    
-    // 14. Validate permissions
-    logger.info("llm", "[ENGINE] Checking permissions");
-    try {
-      if ('permissions' in navigator) {
-        const notifications = await navigator.permissions.query({ name: 'notifications' as PermissionName });
-        const persistentStorage = await navigator.permissions.query({ name: 'persistent-storage' as PermissionName });
-        logger.info("llm", "[ENGINE] Permissions status", {
-          notifications: notifications.state,
-          persistentStorage: persistentStorage.state
-        });
-      }
-    } catch (error) {
-      logger.warn("llm", "[ENGINE] Permission check failed", { error });
-    }
-    
-    // 15. Validate ServiceWorker registration details
-    logger.info("llm", "[ENGINE] Inspecting ServiceWorker registration");
-    const registration = await navigator.serviceWorker.getRegistration();
-    if (registration) {
-      logger.info("llm", "[ENGINE] ServiceWorker registration details", {
-        scope: registration.scope,
-        active: !!registration.active,
-        installing: !!registration.installing,
-        waiting: !!registration.waiting,
-        navigationPreload: !!registration.navigationPreload,
-        pushManager: !!registration.pushManager,
-        sync: !!(registration as any).sync,
-        periodicSync: !!(registration as any).periodicSync
-      });
-      
-      // Check ServiceWorker script
-      if (registration.active?.scriptURL) {
-        logger.info("llm", "[ENGINE] ServiceWorker script", {
-          url: registration.active.scriptURL,
-          state: registration.active.state
-        });
-        
-        // Try to fetch the ServiceWorker script to verify it's accessible
-        try {
-          const swResponse = await fetch(registration.active.scriptURL);
-          logger.info("llm", "[ENGINE] ServiceWorker script fetch", {
-            status: swResponse.status,
-            ok: swResponse.ok,
-            size: swResponse.headers.get('content-length')
-          });
-        } catch (error) {
-          logger.error("llm", "[ENGINE] Failed to fetch ServiceWorker script", { error });
-        }
-      }
-    }
-    
-    // 16. Validate WASM support
-    logger.info("llm", "[ENGINE] Validating WASM support");
-    try {
-      await WebAssembly.compile(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]));
-      logger.info("llm", "[ENGINE] WASM compilation successful");
-    } catch (error) {
-      throw new Error(`WASM not supported: ${error}`);
-    }
-    
-    // 17. Check for potential conflicts
-    logger.info("llm", "[ENGINE] Checking for potential conflicts");
-    const conflicts = {
-      hasAdBlocker: typeof (window as any).adblock === 'boolean' || 
-                   typeof (window as any).adblocker === 'boolean' ||
-                   !!document.querySelector('[data-adblockkey]'),
-      hasPrivacyBadger: !!(window as any).pbtest,
-      hasUblockOrigin: !!(window as any).ublockFound,
-      hasGhostery: !!(window as any).ghostery,
-      hasNoScript: !!(window as any).noscript,
-      inIncognito: !!(window as any).chrome?.incognito,
-      hasCSP: !!document.querySelector('meta[http-equiv="Content-Security-Policy"]')
-    };
-    logger.info("llm", "[ENGINE] Conflict detection", conflicts);
-    
-    // 18. Validate console and error handling
-    logger.info("llm", "[ENGINE] Validating error handling");
-    const originalConsoleError = console.error;
-    let errorCount = 0;
-    console.error = function(...args) {
-      errorCount++;
-      logger.warn("llm", "[ENGINE] Console error detected", {
-        count: errorCount,
-        args: args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg))
-      });
-      originalConsoleError.apply(console, args);
-    };
-    
-    // 19. Check for specific WebLLM requirements
-    logger.info("llm", "[ENGINE] Checking WebLLM requirements");
-    const requirements = {
-      hasSharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
-      hasAtomics: typeof Atomics !== 'undefined',
-      hasMessageChannel: typeof MessageChannel !== 'undefined',
-      hasBlob: typeof Blob !== 'undefined',
-      hasURL: typeof URL !== 'undefined',
-      hasURLSearchParams: typeof URLSearchParams !== 'undefined',
-      hasTextEncoder: typeof TextEncoder !== 'undefined',
-      hasTextDecoder: typeof TextDecoder !== 'undefined',
-      hasReadableStream: typeof ReadableStream !== 'undefined',
-      hasWritableStream: typeof WritableStream !== 'undefined',
-      hasTransformStream: typeof TransformStream !== 'undefined'
-    };
-    logger.info("llm", "[ENGINE] WebLLM requirements", requirements);
-    
-    if (!requirements.hasSharedArrayBuffer || !requirements.hasAtomics) {
-      logger.warn("llm", "[ENGINE] Missing required features for multi-threading", {
-        SharedArrayBuffer: requirements.hasSharedArrayBuffer,
-        Atomics: requirements.hasAtomics
-      });
-    }
-    
-    // 20. Final validation summary
-    logger.info("llm", "[ENGINE] Validation complete", {
-      timestamp: new Date().toISOString(),
-      ready: true
-    });
-    
-    // 21. Performance and timing validation
-    logger.info("llm", "[ENGINE] Validating performance characteristics");
-    const perfStart = performance.now();
-    
-    // Test async performance
-    await Promise.all([
-      new Promise(resolve => setTimeout(resolve, 10)),
-      new Promise(resolve => setTimeout(resolve, 10)),
-      new Promise(resolve => setTimeout(resolve, 10))
-    ]);
-    const perfEnd = performance.now();
-    
-    const performanceMetrics = {
-      asyncOverhead: perfEnd - perfStart,
-      eventLoopLag: 0,
-      timingAccuracy: performance.timeOrigin ? 'available' : 'unavailable',
-      nowResolution: typeof performance.now === 'function',
-      markSupport: typeof performance.mark === 'function',
-      measureSupport: typeof performance.measure === 'function',
-      navigationSupport: !!performance.navigation,
-      resourceSupport: !!performance.getEntriesByType
-    };
-    
-    // Measure event loop lag
-    const lagStart = performance.now();
-    await new Promise(resolve => setTimeout(resolve, 0));
-    performanceMetrics.eventLoopLag = performance.now() - lagStart;
-    
-    logger.info("llm", "[ENGINE] Performance metrics", performanceMetrics);
-    
-    // 22. Validate cross-origin isolation
-    logger.info("llm", "[ENGINE] Checking cross-origin isolation");
-    const crossOriginInfo = {
-      isIsolated: (self as any).crossOriginIsolated,
-      hasCOOP: !!document.querySelector('meta[http-equiv="Cross-Origin-Opener-Policy"]'),
-      hasCOEP: !!document.querySelector('meta[http-equiv="Cross-Origin-Embedder-Policy"]'),
-      hasCORP: !!document.querySelector('meta[http-equiv="Cross-Origin-Resource-Policy"]')
-    };
-    logger.info("llm", "[ENGINE] Cross-origin isolation", crossOriginInfo);
-    
-    // 23. Validate streaming support
-    logger.info("llm", "[ENGINE] Validating streaming support");
-    const streamTest = {
-      readableStream: typeof ReadableStream !== 'undefined',
-      writableStream: typeof WritableStream !== 'undefined',
-      transformStream: typeof TransformStream !== 'undefined',
-      responseStream: false,
-      requestStream: false
-    };
-    
-    try {
-      new Response(new ReadableStream());
-      streamTest.responseStream = true;
-    } catch (e) {
-      streamTest.responseStream = false;
-    }
-    
-    try {
-      new Request('', { body: new ReadableStream(), method: 'POST' });
-      streamTest.requestStream = true;
-    } catch (e) {
-      streamTest.requestStream = false;
-    }
-    
-    logger.info("llm", "[ENGINE] Streaming support", streamTest);
-    
-    // 24. Validate Worker support
-    logger.info("llm", "[ENGINE] Validating Worker support");
-    const workerSupport = {
-      webWorker: typeof Worker !== 'undefined',
-      serviceWorker: typeof ServiceWorker !== 'undefined',
-      sharedWorker: typeof SharedWorker !== 'undefined',
-      messageChannel: typeof MessageChannel !== 'undefined',
-      broadcastChannel: typeof BroadcastChannel !== 'undefined'
-    };
-    
-    // Test basic Worker creation
-    if (workerSupport.webWorker) {
-      try {
-        const blob = new Blob(['self.postMessage("test")'], { type: 'application/javascript' });
-        const worker = new Worker(URL.createObjectURL(blob));
-        worker.terminate();
-        workerSupport.webWorker = true;
-      } catch (e) {
-        workerSupport.webWorker = false;
-        logger.warn("llm", "[ENGINE] Worker creation failed", { error: e });
-      }
-    }
-    
-    logger.info("llm", "[ENGINE] Worker support", workerSupport);
-    
-    // 25. Validate crypto support
-    logger.info("llm", "[ENGINE] Validating crypto support");
-    const cryptoSupport = {
-      subtle: !!crypto?.subtle,
-      randomValues: !!crypto?.getRandomValues,
-      digest: typeof crypto?.subtle?.digest === 'function',
-      encrypt: typeof crypto?.subtle?.encrypt === 'function',
-      decrypt: typeof crypto?.subtle?.decrypt === 'function',
-      sign: typeof crypto?.subtle?.sign === 'function',
-      verify: typeof crypto?.subtle?.verify === 'function'
-    };
-    
-    if (cryptoSupport.subtle) {
-      try {
-        await crypto.subtle.digest('SHA-256', new TextEncoder().encode('test'));
-        cryptoSupport.digest = true;
-      } catch (e) {
-        cryptoSupport.digest = false;
-      }
-    }
-    
-    logger.info("llm", "[ENGINE] Crypto support", cryptoSupport);
-    
-    // 26. Validate error stack traces
-    logger.info("llm", "[ENGINE] Validating error handling");
-    try {
-      const testError = new Error('Test error');
-      const stackTrace = {
-        hasStack: !!testError.stack,
-        stackLength: testError.stack?.length || 0,
-        hasStackTraceLimit: !!(Error as any).stackTraceLimit,
-        stackTraceLimit: (Error as any).stackTraceLimit || 'unknown'
-      };
-      logger.info("llm", "[ENGINE] Stack trace support", stackTrace);
-    } catch (e) {
-      logger.warn("llm", "[ENGINE] Error validation failed", { error: e });
-    }
-    
-    // 27. Validate timing attacks resistance
-    logger.info("llm", "[ENGINE] Checking timing attack mitigations");
-    const timingMitigations = {
-      hasPerformanceNow: typeof performance.now === 'function',
-      hasHighResTimer: performance.timeOrigin !== undefined,
-      timezoneOffset: new Date().getTimezoneOffset(),
-      locale: Intl.DateTimeFormat().resolvedOptions().timeZone
-    };
-    logger.info("llm", "[ENGINE] Timing mitigations", timingMitigations);
-    
-    // 28. Validate debugging capabilities
-    logger.info("llm", "[ENGINE] Checking debugging capabilities");
-    const debugging = {
-      hasDevTools: !!(window as any).chrome?.devtools,
-      hasFirebug: !!(window as any).firebug,
-      hasOpera: !!(window as any).opera,
-      hasIE: !!(window as any).ActiveXObject || 'ActiveXObject' in window,
-      consoleApi: {
-        log: typeof console.log === 'function',
-        warn: typeof console.warn === 'function',
-        error: typeof console.error === 'function',
-        info: typeof console.info === 'function',
-        debug: typeof console.debug === 'function',
-        trace: typeof console.trace === 'function',
-        table: typeof console.table === 'function',
-        group: typeof console.group === 'function',
-        groupEnd: typeof console.groupEnd === 'function',
-        time: typeof console.time === 'function',
-        timeEnd: typeof console.timeEnd === 'function'
-      }
-    };
-    logger.info("llm", "[ENGINE] Debugging capabilities", debugging);
-    
-    // 29. Validate storage quotas
-    logger.info("llm", "[ENGINE] Checking storage quotas");
-    if ('storage' in navigator && 'estimate' in navigator.storage) {
-      try {
-        const estimate = await navigator.storage.estimate();
-        logger.info("llm", "[ENGINE] Storage quota", {
-          quota: estimate.quota,
-          usage: estimate.usage,
-          usageDetails: (estimate as any).usageDetails || 'unavailable',
-          available: estimate.quota ? estimate.quota - (estimate.usage || 0) : 'unknown'
-        });
-      } catch (e) {
-        logger.warn("llm", "[ENGINE] Storage estimate failed", { error: e });
-      }
-    }
-    
-    // 30. Final readiness check
-    logger.info("llm", "[ENGINE] Final readiness check", {
-      timestamp: new Date().toISOString(),
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      cookieEnabled: navigator.cookieEnabled,
-      onLine: navigator.onLine,
-      languages: navigator.languages,
-      screenResolution: `${screen.width}x${screen.height}`,
-      colorDepth: screen.colorDepth,
-      pixelDepth: screen.pixelDepth,
-      readyForInit: true
-    });
-    
-    // 31. Validate browser-specific features
-    logger.info("llm", "[ENGINE] Checking browser-specific features");
-    const browserFeatures = {
-      chrome: !!(window as any).chrome,
-      firefox: typeof (window as any).InstallTrigger !== 'undefined',
-      safari: /^((?!chrome|android).)*safari/i.test(navigator.userAgent),
-      edge: !!(window as any).StyleMedia,
-      hasNotification: typeof Notification !== 'undefined',
-      hasGeolocation: typeof navigator.geolocation !== 'undefined',
-      hasCamera: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
-      hasMicrophone: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
-      hasBattery: !!(navigator as any).getBattery,
-      hasVibration: typeof navigator.vibrate === 'function',
-      hasFullscreen: typeof document.fullscreenEnabled !== 'undefined'
-    };
-    logger.info("llm", "[ENGINE] Browser features", browserFeatures);
-    
-    // 32. Validate security headers
-    logger.info("llm", "[ENGINE] Checking security context");
-    const securityContext = {
-      protocol: location.protocol,
-      hostname: location.hostname,
-      port: location.port,
-      origin: location.origin,
-      isSecure: location.protocol === 'https:',
-      isLocalhost: location.hostname === 'localhost' || location.hostname === '127.0.0.1',
-      hasCSP: !!document.querySelector('meta[http-equiv="Content-Security-Policy"]'),
-      referrerPolicy: (document as any).referrerPolicy || 'unknown',
-      mixedContent: 'mixedContent' in document
-    };
-    logger.info("llm", "[ENGINE] Security context", securityContext);
-
-    // Check if model is already cached
-    logger.info("llm", "Checking model cache...", { modelId: this.modelId });
+    // Check cache status in IndexedDB
     const isCached = await this.isModelCached();
-    logger.info("llm", "Cache check result", { 
-      modelId: this.modelId, 
-      isCached,
-      checkTime: new Date().toISOString()
-    });
-    
-    // Get model URL and validate it
-    const modelUrl = this.getModelUrl();
-    if (!modelUrl) {
-      throw new Error(`Model URL not found for ${this.modelId}`);
-    }
-    
-    this.onUpdate("Validating model URLs...");
-    const isModelLibValid = await this.validateUrl(modelUrl);
-    if (!isModelLibValid) {
-      throw new Error(`Model library URL is not accessible: ${modelUrl}`);
-    }
-    
-    // Also validate the model weights URL if available
-    const modelRecord = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId) || 
-                       webllm.prebuiltAppConfig.model_list.find(m => m.model_id === this.modelId);
-    
-    if (modelRecord?.model) {
-      // Check for both .bin and .wasm files since different models use different formats
-      const modelWeightsUrlBin = modelRecord.model + "params_shard_0.bin";
-      const modelWeightsUrlWasm = modelRecord.model + "model-00001-of-00001.wasm";
-      
-      let isModelWeightsValid = false;
-      let validWeightsUrl = "";
-      
-      // First try .bin format (most common)
-      try {
-        isModelWeightsValid = await this.validateUrl(modelWeightsUrlBin);
-        if (isModelWeightsValid) {
-          validWeightsUrl = modelWeightsUrlBin;
-        }
-      } catch (e) {
-        // Ignore error and try .wasm format
-      }
-      
-      // If .bin failed, try .wasm format
-      if (!isModelWeightsValid) {
-        try {
-          isModelWeightsValid = await this.validateUrl(modelWeightsUrlWasm);
-          if (isModelWeightsValid) {
-            validWeightsUrl = modelWeightsUrlWasm;
-          }
-        } catch (e) {
-          // Ignore error
-        }
-      }
-      
-      if (!isModelWeightsValid) {
-        logger.warn("llm", "Model weights URL not accessible, but continuing...", {
-          modelId: this.modelId,
-          triedBinUrl: modelWeightsUrlBin,
-          triedWasmUrl: modelWeightsUrlWasm
-        });
-      } else {
-        logger.info("llm", "Model weights URL validated", {
-          modelId: this.modelId,
-          validWeightsUrl: validWeightsUrl
-        });
-      }
-    }
-    
-    // Double-check for empty cache and clean it up
-    if (!isCached) {
-      const cacheKey = `web-llm-${this.modelId}`;
-      const cache = await caches.open(cacheKey);
-      const keys = await cache.keys();
-      
-      if (keys.length === 0) {
-        logger.warn("llm", "Cleaning up empty cache", {
-          modelId: this.modelId,
-          cacheKey
-        });
-        await caches.delete(cacheKey);
-        this.onUpdate("Cleaned up empty cache entry...");
-      }
-    }
-    
     if (isCached) {
       const cachedSize = await this.getCachedModelSize();
-      const sizeMB = (cachedSize / 1024 / 1024).toFixed(1);
-      
-      // If cache exists but size is 0 or very small, it's likely corrupted
-      if (cachedSize < 1024 * 1024) { // Less than 1MB = corrupted
-        const loudCorruptionError = `⚠️  CORRUPTED MODEL CACHE DETECTED!\n\n` +
-          `Model "${this.modelId}" has a corrupted cache (${sizeMB}MB).\n\n` +
-          `🔧 AUTOMATIC FIX:\n` +
-          `   • Clearing corrupted cache...\n` +
-          `   • Will re-download fresh model\n\n` +
-          `💡 To prevent this in the future:\n` +
-          `   • Don't close browser during download\n` +
-          `   • Ensure stable internet connection\n` +
-          `   • Check available disk space\n\n` +
-          `This is a one-time automatic fix. No action needed.`;
-        
-        logger.warn("llm", "CORRUPTED CACHE DETECTED - Clearing automatically", { 
-          modelId: this.modelId, 
-          cachedSizeMB: sizeMB 
-        });
-        
-        this.onUpdate(loudCorruptionError);
+      if (cachedSize < 1024 * 1024) { // Less than 1MB is likely corrupted
+        this.onUpdate("Detected corrupted cache, clearing...");
         await this.clearCorruptedModelAndRetry();
       } else {
-        this.onUpdate(`Loading ${this.modelId} from cache (${sizeMB}MB)...`);
-        logger.info("llm", `Model found in cache`, { 
-          modelId: this.modelId, 
-          cachedSizeMB: sizeMB 
-        });
+        const sizeMB = (cachedSize / 1024 / 1024).toFixed(1);
+        this.onUpdate(`Loading ${this.modelId} from IndexedDB cache (${sizeMB}MB)...`);
       }
     } else {
-      this.onUpdate(`Downloading ${this.modelId} (first time - may take several minutes)...`);
-      logger.info("llm", `Model not cached, will download`, { 
-        modelId: this.modelId,
-        modelUrl: modelUrl
-      });
+      this.onUpdate(`Downloading ${this.modelId} (first time may take minutes)...`);
     }
 
     const engineConfig: webllm.MLCEngineConfig = {
       appConfig: CUSTOM_APP_CONFIG,
       initProgressCallback: (report: webllm.InitProgressReport) => {
-        logger.info("llm", `=== PROGRESS UPDATE ===`, {
-          text: report.text,
-          progress: report.progress,
-          timeElapsed: Date.now(),
-          modelId: this.modelId
-        });
+        logger.info("llm", "Init progress", { text: report.text, progress: report.progress });
         this.onUpdate(`Loading: ${report.text}`);
+        
+        // Capture cache size from WebLLM's loading messages
+        // Format: "Loading model from cache[X/Y]: 123MB loaded"
+        const cacheMatch = report.text.match(/(\d+)MB loaded/);
+        if (cacheMatch) {
+          const sizeMB = parseInt(cacheMatch[1], 10);
+          const sizeBytes = sizeMB * 1024 * 1024;
+          setCachedModelSizeFromWebLLM(this.modelId, sizeBytes);
+          logger.debug("llm", "[CACHE] Captured model size from WebLLM", { 
+            modelId: this.modelId, 
+            sizeMB, 
+            sizeBytes 
+          });
+        }
       },
     };
 
-    logger.info("llm", "Engine configuration prepared", {
-      hasAppConfig: !!engineConfig.appConfig,
-      modelListLength: engineConfig.appConfig?.model_list?.length || 0,
-      useIndexedDBCache: engineConfig.appConfig?.useIndexedDBCache,
-      modelId: this.modelId
-    });
-
-    // Initialize ServiceWorker engine only
-    await this.initServiceWorkerEngine(engineConfig);
-    
-    logger.info("llm", "=== LLM Engine Initialization Complete ===", { 
-      modelId: this.modelId,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  private async initServiceWorkerEngine(engineConfig: webllm.MLCEngineConfig) {
-    this.onUpdate("Initializing Service Worker Engine...");
-    logger.info("llm", "[ENGINE] Starting ServiceWorker engine initialization", { 
-      modelId: this.modelId,
-      timestamp: new Date().toISOString()
-    });
-    
-    // Add timeout wrapper that resets on progress updates
-    const ENGINE_INIT_TIMEOUT = 600000; // 10 minutes - resets on progress
-    const ABSOLUTE_TIMEOUT = 900000; // 15 minutes absolute timeout
-    const INITIAL_PROGRESS_TIMEOUT = 30000; // 30 seconds for first progress update
-    
-    logger.info("llm", "[ENGINE] Timeout configuration", {
-      modelId: this.modelId,
-      engineInitTimeout: ENGINE_INIT_TIMEOUT,
-      absoluteTimeout: ABSOLUTE_TIMEOUT,
-      initialProgressTimeout: INITIAL_PROGRESS_TIMEOUT
-    });
-    
-    // Create timeout with reset capability
-    let timeoutId: number | undefined;
-    let absoluteTimeoutId: number | undefined;
-    let initialProgressTimeoutId: number | undefined;
-    let lastProgressTime = Date.now();
-    let hasReceivedProgress = false;
     const initStartTime = Date.now();
-    
-    // Monitor network activity
-    let networkActivityDetected = false;
-    let fetchCount = 0;
-    const originalFetch = window.fetch;
-    window.fetch = function(...args) {
-      fetchCount++;
-      networkActivityDetected = true;
-      logger.info("llm", "[NETWORK] Fetch request detected", {
-        url: args[0],
-        method: args[1]?.method || 'GET',
-        fetchCount,
-        timestamp: new Date().toISOString()
-      });
-      return originalFetch.apply(this, args);
-    };
-    
-    // Monitor ServiceWorker messages
-    const messageHandler = (event: MessageEvent) => {
-      logger.info("llm", "[SW_MESSAGE] ServiceWorker message received", {
-        origin: event.origin,
-        dataType: typeof event.data,
-        dataKeys: event.data ? Object.keys(event.data) : null,
-        data: event.data,
-        timestamp: new Date().toISOString()
-      });
-    };
-    navigator.serviceWorker.addEventListener('message', messageHandler);
-    
-    // Declare timeouts in outer scope
-    let quickResolveTimeout: number | undefined;
-    let iframeCheckTimeout: number | undefined;
-    
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      const resetTimeout = () => {
-        logger.debug("llm", "[ENGINE] Resetting timeout", {
-          modelId: this.modelId,
-          timeSinceStart: Date.now() - initStartTime
-        });
-        
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        lastProgressTime = Date.now();
-        hasReceivedProgress = true;
-        
-        // Clear initial progress timeout once we receive first progress
-        if (initialProgressTimeoutId) {
-          clearTimeout(initialProgressTimeoutId);
-          initialProgressTimeoutId = undefined;
-          logger.info("llm", "[ENGINE] Received first progress, cleared initial timeout", {
-            modelId: this.modelId,
-            timeToFirstProgress: Date.now() - initStartTime
-          });
-        }
-        
-        timeoutId = setTimeout(() => {
-          const timeSinceLastProgress = Date.now() - lastProgressTime;
-          const totalTime = Date.now() - initStartTime;
-          logger.error("llm", "[ENGINE] ServiceWorkerMLCEngine initialization timed out", { 
-            timeout: ENGINE_INIT_TIMEOUT,
-            timeSinceLastProgress,
-            totalTime,
-            modelId: this.modelId,
-            networkActivityDetected
-          });
-          reject(new Error(`ServiceWorkerMLCEngine initialization timed out after ${ENGINE_INIT_TIMEOUT}ms with no progress for ${timeSinceLastProgress}ms. Total time: ${totalTime}ms. Network activity: ${networkActivityDetected ? 'detected' : 'none'}. This may indicate:\n1. Download stalled or network issues\n2. WebGPU shader compilation hanging\n3. Browser resource limits or extensions blocking\n4. ServiceWorker communication failure\n\nTry:\n- Check browser console for WebGPU errors\n- Disable browser extensions\n- Refresh page and try again\n- Try a different browser (Chrome/Edge recommended)`));
-        }, ENGINE_INIT_TIMEOUT);
-      };
-      
-      // Set initial timeout for first progress update
-      initialProgressTimeoutId = setTimeout(() => {
-        if (!hasReceivedProgress) {
-          const totalTime = Date.now() - initStartTime;
-          logger.error("llm", "[ENGINE] No progress received within initial timeout", { 
-            totalTime,
-            modelId: this.modelId,
-            networkActivityDetected
-          });
-          reject(new Error(`No progress received after ${totalTime}ms. Network activity: ${networkActivityDetected ? 'detected' : 'none'}. The model download/initialization may be stuck. This often happens when:\n1. ServiceWorker is not responding\n2. WebGPU context creation is hanging\n3. Network requests are blocked\n\nImmediate actions:\n- Check browser console for errors\n- Refresh the page and try again\n- Try a smaller model`));
-        }
-      }, INITIAL_PROGRESS_TIMEOUT);
-      
-      // Set absolute timeout that doesn't reset
-      absoluteTimeoutId = setTimeout(() => {
-        const totalTime = Date.now() - initStartTime;
-        logger.error("llm", "[ENGINE] ServiceWorkerMLCEngine absolute timeout reached", { 
-          totalTime,
-          modelId: this.modelId,
-          networkActivityDetected
-        });
-        reject(new Error(`ServiceWorkerMLCEngine failed to initialize after ${totalTime}ms. Network activity: ${networkActivityDetected ? 'detected' : 'none'}. This indicates a serious issue with WebGPU/WASM initialization. Please:\n1. Check browser console for errors\n2. Ensure WebGPU is enabled\n3. Try refreshing the page\n4. Consider using a different browser`));
-      }, ABSOLUTE_TIMEOUT);
-      
-      // Update progress callback to reset timeout
-      const originalProgressCallback = engineConfig.initProgressCallback;
-      engineConfig.initProgressCallback = (report: webllm.InitProgressReport) => {
-        logger.info("llm", "[ENGINE] === PROGRESS CALLBACK ===", {
-          text: report.text,
-          progress: report.progress,
-          timeElapsed: Date.now() - initStartTime,
-          modelId: this.modelId
-        });
-        
-        // Reset timeout on each progress update
-        resetTimeout();
-        
-        // Call original callback
-        if (originalProgressCallback) {
-          originalProgressCallback(report);
-        }
-      };
-      
-      // Start initial timeout
-      resetTimeout();
-      logger.debug("llm", "[ENGINE] Initial timeout started", { modelId: this.modelId });
-    });
-    
-    // Create engine with comprehensive logging
-    logger.info("llm", "Creating MLCEngine (first-time download may take 5-10 minutes for 360MB model)...");
-    this.onUpdate("Creating MLCEngine (first-time download may take 5-10 minutes for 360MB model)...");
-    
-    // Add detailed debugging before engine creation
-    logger.info("llm", "[ENGINE] === PRE-CREATION DEBUG START ===");
-    logger.info("llm", "[ENGINE] Engine creation parameters", {
-      modelId: this.modelId,
-      modelLib: modelUrl,
-      appConfig: {
-        hasAppConfig: true,
-        modelListCount: engineConfig.appConfig.model_list.length,
-        useIndexedDBCache: engineConfig.appConfig.useIndexedDBCache,
-        logLevel: engineConfig.appConfig.logLevel
-      },
-      initProgressCallback: typeof engineConfig.initProgressCallback,
-      timeout: {
-        engineInitTimeout: this.engineInitTimeout,
-        absoluteTimeout: this.absoluteTimeout,
-        initialProgressTimeout: this.initialProgressTimeout
-      },
-      environment: {
-        userAgent: navigator.userAgent,
-        platform: navigator.platform,
-        onLine: navigator.onLine,
-        cookieEnabled: navigator.cookieEnabled,
-        languages: navigator.languages,
-        screenResolution: `${screen.width}x${screen.height}`,
-        colorDepth: screen.colorDepth,
-        pixelDepth: screen.pixelDepth,
-        hardwareConcurrency: navigator.hardwareConcurrency,
-        deviceMemory: (navigator as any).deviceMemory || 'unknown',
-        webgl: !!document.createElement('canvas').getContext('webgl'),
-        webgl2: !!document.createElement('canvas').getContext('webgl2'),
-        webGPU: 'gpu' in navigator
-      },
-      serviceWorker: {
-        controller: !!navigator.serviceWorker.controller,
-        controllerUrl: navigator.serviceWorker.controller?.scriptURL,
-        ready: !!navigator.serviceWorker.ready,
-        state: (await navigator.serviceWorker.ready).state
-      },
-      storage: {
-        indexedDB: typeof indexedDB !== 'undefined',
-        caches: typeof caches !== 'undefined',
-        storageQuota: 'storage' in navigator && 'estimate' in navigator.storage
-      },
-      network: {
-        connection: !!(navigator as any).connection,
-        effectiveType: (navigator as any).connection?.effectiveType,
-        downlink: (navigator as any).connection?.downlink,
-        rtt: (navigator as any).connection?.rtt,
-        saveData: (navigator as any).connection?.saveData
-      },
-      security: {
-        protocol: location.protocol,
-        hostname: location.hostname,
-        port: location.port,
-        origin: location.origin,
-        isSecure: location.protocol === 'https:',
-        isLocalhost: location.hostname === 'localhost' || location.hostname === '127.0.0.1'
-      },
-      webllm: {
-        version: webllm.version || 'unknown',
-        createEngine: typeof webllm.CreateMLCEngine,
-        createSWEngine: typeof webllm.CreateServiceWorkerMLCEngine,
-        hasChat: !!webllm.CreateMLCEngine,
-        hasSWChat: !!webllm.CreateServiceWorkerMLCEngine,
-        hasAppConfig: !!engineConfig.appConfig,
-        appConfigModelCount: engineConfig.appConfig?.model_list?.length,
-        initProgressCallbackExists: !!engineConfig.initProgressCallback
-      }
-    });
-    logger.info("llm", "[ENGINE] === PRE-CREATION DEBUG END ===");
-    
-    // Monitor fetch activity during engine creation
-    let fetchCount = 0;
-    let totalBytesDownloaded = 0;
-    let fetchUrls = new Set<string>();
-    let fetchErrors: Array<{url: string, error: string, timestamp: number}> = [];
-    
-    const originalFetch = window.fetch;
-    window.fetch = async function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      const fetchId = ++fetchCount;
-      const startTime = performance.now();
-      
-      logger.info("llm", "[FETCH] Engine fetch started", {
-        fetchId,
-        url,
-        method: init?.method || 'GET',
-        timestamp: new Date().toISOString(),
-        totalFetchesSoFar: fetchCount
-      });
-      
-      fetchUrls.add(url);
-      
-      try {
-        const response = await originalFetch.call(this, input, init);
-        
-        // Get content length if available
-        const contentLength = response.headers.get('content-length');
-        const bytes = contentLength ? parseInt(contentLength) : 0;
-        totalBytesDownloaded += bytes;
-        
-        const duration = performance.now() - startTime;
-        
-        logger.info("llm", "[FETCH] Engine fetch completed", {
-          fetchId,
-          url,
-          status: response.status,
-          statusText: response.statusText,
-          ok: response.ok,
-          contentType: response.headers.get('content-type'),
-          contentLength: bytes,
-          duration: Math.round(duration),
-          totalBytesDownloaded,
-          uniqueUrls: fetchUrls.size,
-          timestamp: new Date().toISOString()
-        });
-        
-        // Log download progress for large files
-        if (bytes > 1024 * 1024) {
-          logger.info("llm", "[DOWNLOAD] Large file downloaded", {
-            fetchId,
-            url,
-            sizeMB: (bytes / (1024 * 1024)).toFixed(2),
-            duration: Math.round(duration),
-            speedMBps: (bytes / (1024 * 1024) / (duration / 1000)).toFixed(2),
-            timestamp: new Date().toISOString()
-          });
-        }
-        
-        return response;
-      } catch (error) {
-        const duration = performance.now() - startTime;
-        const errorInfo = {
-          url,
-          error: error instanceof Error ? error.message : String(error),
-          timestamp: Date.now(),
-          duration: Math.round(duration),
-          fetchId
-        };
-        
-        fetchErrors.push(errorInfo);
-        
-        logger.error("llm", "[FETCH] Engine fetch failed", {
-          ...errorInfo,
-          totalErrors: fetchErrors.length,
-          timestamp: new Date().toISOString()
-        });
-        
-        throw error;
-      }
-    };
-    
-    // Monitor ServiceWorker messages during engine creation
-    let swMessages = 0;
-    let swMessageTypes = new Set<string>();
-    const originalPostMessage = navigator.serviceWorker.controller!.postMessage.bind(navigator.serviceWorker.controller);
-    navigator.serviceWorker.controller!.postMessage = function(message: any, options?: PostMessageOptions) {
-      swMessages++;
-      const messageType = message?.kind || 'unknown';
-      swMessageTypes.add(messageType);
-      
-      logger.info("llm", "[SW] Message sent during engine creation", {
-        messageId: swMessages,
-        messageType,
-        messageKind: message?.kind,
-        messageUuid: message?.uuid,
-        hasContent: !!message?.content,
-        timestamp: new Date().toISOString(),
-        totalMessages: swMessages,
-        uniqueMessageTypes: Array.from(swMessageTypes)
-      });
-      
-      return originalPostMessage(message, options);
-    };
-    
-    // Create performance observer
-    let performanceEntries: any[] = [];
-    if ('PerformanceObserver' in window) {
-      const perfObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.name.includes('huggingface') || entry.name.includes('github') || entry.name.includes('wasm')) {
-            performanceEntries.push({
-              name: entry.name,
-              type: entry.entryType,
-              startTime: entry.startTime,
-              duration: entry.duration,
-              transferSize: (entry as any).transferSize || 0,
-              encodedBodySize: (entry as any).encodedBodySize || 0,
-              decodedBodySize: (entry as any).decodedBodySize || 0,
-              timestamp: new Date().toISOString()
-            });
-          }
-        }
-      });
-      
-      perfObserver.observe({ entryTypes: ['resource', 'navigation'] });
-    }
-    
-    // Log engine creation start
-    const engineCreationStartTime = performance.now();
-    logger.info("llm", "[ENGINE] === CALLING CreateServiceWorkerMLCEngine ===", {
-      timestamp: new Date().toISOString(),
-      performanceNow: engineCreationStartTime,
-      modelId: this.modelId,
-      expectingDownload: true
-    });
-    
+    let timeoutId: any;
+    let absoluteTimeoutId: any;
+
     try {
-      // Create the engine
-      this.engine = await webllm.CreateServiceWorkerMLCEngine(
-        this.modelId,
-        engineConfig
-      );
-      
-      const engineCreationDuration = performance.now() - engineCreationStartTime;
-      
-      // Log successful creation
-      logger.info("llm", "[ENGINE] === ENGINE CREATED SUCCESSFULLY ===", {
-        timestamp: new Date().toISOString(),
-        duration: Math.round(engineCreationDuration),
-        durationSeconds: (engineCreationDuration / 1000).toFixed(2),
-        modelId: this.modelId,
-        fetchStats: {
-          totalFetches: fetchCount,
-          uniqueUrls: fetchUrls.size,
-          totalBytesDownloaded,
-          totalBytesMB: (totalBytesDownloaded / (1024 * 1024)).toFixed(2),
-          errors: fetchErrors.length
-        },
-        swStats: {
-          totalMessages: swMessages,
-          messageTypes: Array.from(swMessageTypes)
-        },
-        performanceEntries: performanceEntries.length,
-        engineCreated: !!this.engine,
-        engineType: typeof this.engine,
-        engineMethods: this.engine ? Object.getOwnPropertyNames(this.engine) : []
+      // Use Promise.race for timeout handling
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`Initialization timed out after ${this.engineInitTimeout}ms`));
+        }, this.engineInitTimeout);
       });
-      
-      // Restore original fetch
-      window.fetch = originalFetch;
-      navigator.serviceWorker.controller!.postMessage = originalPostMessage;
-      
-    } catch (error) {
-      const engineCreationDuration = performance.now() - engineCreationStartTime;
-      
-      logger.error("llm", "[ENGINE] === ENGINE CREATION FAILED ===", {
-        timestamp: new Date().toISOString(),
-        duration: Math.round(engineCreationDuration),
-        durationSeconds: (engineCreationDuration / 1000).toFixed(2),
-        modelId: this.modelId,
-        error: error instanceof Error ? {
-          name: error.name,
-          message: error.message,
-          stack: error.stack
-        } : error,
-        fetchStats: {
-          totalFetches: fetchCount,
-          uniqueUrls: fetchUrls.size,
-          totalBytesDownloaded,
-          totalBytesMB: (totalBytesDownloaded / (1024 * 1024)).toFixed(2),
-          errors: fetchErrors.length,
-          errorDetails: fetchErrors
-        },
-        swStats: {
-          totalMessages: swMessages,
-          messageTypes: Array.from(swMessageTypes)
-        },
-        performanceEntries: performanceEntries.length,
-        performanceDetails: performanceEntries.slice(-10), // Last 10 entries
-        environment: {
-          onLine: navigator.onLine,
-          webGPU: 'gpu' in navigator,
-          serviceWorkerActive: !!(await navigator.serviceWorker.ready).active
-        }
+
+      const absolutePromise = new Promise<never>((_, reject) => {
+        absoluteTimeoutId = setTimeout(() => {
+          reject(new Error(`Absolute initialization timeout reached (${this.absoluteTimeout}ms)`));
+        }, this.absoluteTimeout);
       });
-      
-      // Restore original fetch
-      window.fetch = originalFetch;
-      navigator.serviceWorker.controller!.postMessage = originalPostMessage;
-      
-      throw error;
-    }
-      
-      if (!engineConfig.appConfig) {
-        throw new Error("Engine config missing appConfig");
-      }
-      
-      // Step 2: Check if CreateServiceWorkerMLCEngine function exists
-      logger.info("llm", "[ENGINE] Step 2: Checking CreateServiceWorkerMLCEngine function", {
-        modelId: this.modelId,
-        functionExists: typeof webllm.CreateServiceWorkerMLCEngine === 'function'
-      });
-      
-      if (typeof webllm.CreateServiceWorkerMLCEngine !== 'function') {
-        throw new Error("CreateServiceWorkerMLCEngine not available");
-      }
-      
-      // Step 3: Prepare parameters
-      const prePromiseTime = Date.now();
-      logger.info("llm", "[ENGINE] Step 3: About to create engine", {
-        modelId: this.modelId,
-        timeSinceStart: prePromiseTime - initStartTime,
-        modelLib: engineConfig.appConfig.model_list.find(m => m.model_id === this.modelId)?.model_lib
-      });
-      
-      // Step 4: Create the engine - THIS IS WHERE IT HANGS
-      logger.info("llm", "[ENGINE] Step 4: CALLING CreateServiceWorkerMLCEngine", {
-        modelId: this.modelId,
-        timestamp: new Date().toISOString(),
-        readyType: typeof navigator.serviceWorker.ready
-      });
-      
-      // Wait for ServiceWorker to be ready if needed
-      if (navigator.serviceWorker.ready) {
-        logger.info("llm", "[ENGINE] Awaiting ServiceWorker readiness", {
-          modelId: this.modelId
-        });
-        await navigator.serviceWorker.ready;
-        logger.info("llm", "[ENGINE] ServiceWorker is ready", {
-          modelId: this.modelId
-        });
-      }
-      
-      // CRITICAL: Ensure ServiceWorker is controlling the page
-      if (!navigator.serviceWorker.controller) {
-        logger.error("llm", "[ENGINE] No ServiceWorker controller detected", {
-          modelId: this.modelId
-        });
-        
-        // Try to claim the page
-        const registration = await navigator.serviceWorker.ready;
-        if (registration.active) {
-          logger.info("llm", "[ENGINE] Attempting to claim page with active ServiceWorker", {
-            modelId: this.modelId
-          });
-          // Sometimes need to trigger a message to establish control
-          registration.active.postMessage({ type: 'claim' });
-          
-          // Wait a bit for control to be established
-          await new Promise(resolve => setTimeout(resolve, 100));
-          
-          if (!navigator.serviceWorker.controller) {
-            throw new Error("ServiceWorker is not controlling the page. Please refresh the page.");
-          }
-        } else {
-          throw new Error("No active ServiceWorker found. Please refresh the page.");
-        }
-      }
-      
-      // Add a listener to see if WebLLM sends any messages
-      const originalPostMessage = navigator.serviceWorker.controller?.postMessage.bind(navigator.serviceWorker.controller);
-      const currentModelId = this.modelId; // Capture modelId for closure
-      let messageCount = 0;
-      
-      if (navigator.serviceWorker.controller && originalPostMessage) {
-        navigator.serviceWorker.controller.postMessage = function(data) {
-          messageCount++;
-          logger.info("llm", "[WEBLLM] Sending message to ServiceWorker", {
-            modelId: currentModelId,
-            messageNumber: messageCount,
-            dataType: typeof data,
-            dataKeys: data ? Object.keys(data) : null,
-            dataKind: data?.kind,
-            dataUuid: data?.uuid,
-            timestamp: new Date().toISOString()
-          });
-          
-          // Log the actual data being sent
-          if (data?.kind === 'init') {
-            logger.info("llm", "[WEBLLM] INIT message details", {
-              modelId: currentModelId,
-              messageNumber: messageCount,
-              hasModelId: !!data.content?.model_id,
-              hasAppConfig: !!data.content?.app_config,
-              appConfigModelCount: data.content?.app_config?.model_list?.length
-            });
-          }
-          
-          return originalPostMessage(data);
-        };
-      }
-      
-      // Log just before calling WebLLM
-      logger.info("llm", "[ENGINE] About to call webllm.CreateServiceWorkerMLCEngine", {
-        modelId: this.modelId,
-        timestamp: new Date().toISOString(),
-        engineConfigType: typeof engineConfig,
-        hasInitProgressCallback: !!engineConfig.initProgressCallback
-      });
-      
-      const preCallTime = performance.now();
-      logger.info("llm", "[ENGINE] Starting performance measurement", {
-        modelId: this.modelId,
-        preCallTime
-      });
-      
-      const enginePromise = webllm.CreateServiceWorkerMLCEngine(
-        this.modelId,
-        engineConfig
-      );
-      
-      const postCallTime = performance.now();
-      logger.info("llm", "[ENGINE] CreateServiceWorkerMLCEngine function returned", {
-        modelId: this.modelId,
-        timeTaken: postCallTime - preCallTime,
-        promiseType: typeof enginePromise,
-        hasThen: typeof enginePromise.then === 'function'
-      });
-      
-      logger.info("llm", "[ENGINE] Step 5: Promise returned, now awaiting", {
-        modelId: this.modelId,
-        timeSinceCall: Date.now() - prePromiseTime
-      });
-      
-      const postPromiseTime = Date.now();
-      logger.info("llm", "[ENGINE] CreateServiceWorkerMLCEngine promise created", { 
-        modelId: this.modelId,
-        timeSinceStart: postPromiseTime - initStartTime,
-        promiseCreationTime: postPromiseTime - prePromiseTime
-      });
-      
-      // Step 6: Await the engine - THIS IS THE CRITICAL POINT
-      logger.info("llm", "[ENGINE] Step 6: ABOUT TO AWAIT ENGINE PROMISE", {
-        modelId: this.modelId,
-        timestamp: new Date().toISOString(),
-        promiseState: "pending",
-        totalMessagesSent: messageCount,
-        networkActivityDetected,
-        totalFetches: fetchCount
-      });
-      
-      // Add a periodic log while waiting
-      const waitLogInterval = setInterval(() => {
-        logger.info("llm", "[ENGINE] Still waiting for engine promise...", {
-          modelId: this.modelId,
-          elapsed: Date.now() - initStartTime,
-          messagesSent: messageCount,
-          fetches: fetchCount,
-          networkActivity: networkActivityDetected
-        });
-      }, 5000);
-      
-      const preAwaitTime = Date.now();
-      logger.info("llm", "[ENGINE] Starting await at", {
-        modelId: this.modelId,
-        preAwaitTime,
-        timeSinceInitStart: preAwaitTime - initStartTime
-      });
-      
-      // Create a wrapper promise to track resolution
-      const wrappedEnginePromise = enginePromise.then(engine => {
-        clearInterval(waitLogInterval);
-        const resolveTime = Date.now();
-        logger.info("llm", "[ENGINE] PROMISE RESOLVED!", {
-          modelId: this.modelId,
-          resolveTime,
-          timeAwaited: resolveTime - preAwaitTime,
-          totalTime: resolveTime - initStartTime,
-          totalMessagesSent: messageCount,
-          totalFetches: fetchCount,
-          networkActivityDetected,
-          engineType: typeof engine,
-          hasGenerate: typeof (engine as any).generate === 'function'
-        });
-        return engine;
-      }).catch(error => {
-        clearInterval(waitLogInterval);
-        const errorTime = Date.now();
-        logger.error("llm", "[ENGINE] PROMISE REJECTED!", {
-          modelId: this.modelId,
-          errorTime,
-          timeAwaited: errorTime - preAwaitTime,
-          totalTime: errorTime - initStartTime,
-          errorMessage: error.message,
-          errorStack: error.stack,
-          totalMessagesSent: messageCount,
-          totalFetches: fetchCount
-        });
-        throw error;
-      });
-      
-      this.engine = await wrappedEnginePromise;
-      
-      // Check if promise resolves quickly (indicates cached model)
-      quickResolveTimeout = setTimeout(() => {
-        logger.info("llm", "[ENGINE] Engine promise still pending after 5 seconds", {
-          modelId: this.modelId,
-          networkActivityDetected
-        });
-        
-        // If no network activity after 5 seconds, likely an iframe issue
-        if (!networkActivityDetected && window.parent !== window) {
-          logger.warn("llm", "[ENGINE] Likely iframe environment issue detected", {
-            modelId: this.modelId,
-            inIframe: window.parent !== window,
-            userAgent: navigator.userAgent
-          });
-          
-          // Show a warning to the user
-          this.onUpdate(`⚠️ Slow initialization detected\n\nThis appears to be running in an iframe environment which can block WebGPU/ServiceWorker APIs.\n\nRecommendations:\n• Open the app directly in a new tab\n• Use Chrome/Edge browser\n• Ensure WebGPU is enabled\n\nContinuing to wait...`);
-        }
-      }, 5000);
-      
-      // Add a 10-second check for iframe environments
-      iframeCheckTimeout = setTimeout(() => {
-        if (!networkActivityDetected && window.parent !== window) {
-          logger.error("llm", "[ENGINE] IFRAME ENVIRONMENT BLOCKING DETECTED", {
-            modelId: this.modelId,
-            inIframe: true,
-            noNetworkActivity: true
-          });
-          
-          const iframeError = `🚫 IFRAME ENVIRONMENT DETECTED\n\n` +
-            `The model initialization is blocked by the iframe environment.\n\n` +
-            `📋 WHY THIS HAPPENS:\n` +
-            `• Browsers restrict WebGPU/ServiceWorker in iframes\n` +
-            `• Security policies prevent large downloads\n` +
-            `• Preview environments have limited permissions\n\n` +
-            `🔧 SOLUTION:\n` +
-            `1. Open this URL directly in a new tab:\n` +
-            `   http://localhost:5173/keel/\n` +
-            `2. Or use a regular browser window (not preview)\n` +
-            `3. Ensure you're using Chrome/Edge with WebGPU\n\n` +
-            `⚠️  The model download will NOT work in this iframe.`;
-          
-          this.onUpdate(iframeError);
-        }
-      }, 10000);
-      
-      // Step 8: Race between engine and timeout
-      logger.info("llm", "[ENGINE] Step 8: STARTING PROMISE.RACE", {
-        modelId: this.modelId,
-        timestamp: new Date().toISOString(),
-        racingWith: "enginePromise vs timeoutPromise"
-      });
-      
-      const preRaceTime = Date.now();
-      this.engine = await Promise.race([
-        enginePromise.then(engine => {
-          const raceWinTime = Date.now();
-          logger.info("llm", "[ENGINE] ENGINE PROMISE WON THE RACE!", {
-            modelId: this.modelId,
-            timeToWin: raceWinTime - preRaceTime,
-            totalTime: raceWinTime - initStartTime,
-            networkActivityDetected,
-            totalFetches: fetchCount
-          });
-          clearTimeout(quickResolveTimeout);
-          clearTimeout(iframeCheckTimeout);
-          return engine;
-        }),
-        timeoutPromise
-      ]);
-      
-      const initTime = Date.now() - initStartTime;
-      logger.info("llm", "[ENGINE] ServiceWorkerMLCEngine initialized successfully", { 
-        modelId: this.modelId,
-        initTimeMs: initTime,
-        timestamp: new Date().toISOString(),
-        networkActivityDetected
-      });
-      
-      // Verify model integrity
-      try {
-        logger.info("llm", "[ENGINE] Starting model verification", { modelId: this.modelId });
-        this.onUpdate("Verifying model integrity...");
-        
-        // TODO: Fix model verification - it's causing false failures
-        // The model loads successfully but verification fails due to incorrect chunk handling
-        logger.info("llm", "[ENGINE] Skipping model verification (temporarily disabled)", { 
-          modelId: this.modelId,
-          reason: "Verification logic needs to be fixed for WebLLM chunked caching"
-        });
-        this.onUpdate("✅ Model loaded and ready!");
-        
-        // const isVerified = await modelVerifier.verifyCachedModel(this.modelId);
-        // 
-        // logger.info("llm", "[ENGINE] Model verification result", {
-        //   modelId: this.modelId,
-        //   isVerified
-        // });
-        // 
-        // if (!isVerified) {
-        //   throw new Error("Model integrity verification failed");
-        // }
-        // this.onUpdate("✅ Model verified and ready!");
-      } catch (verificationError) {
-        logger.error("llm", "[ENGINE] Model verification failed", { 
-          modelId: this.modelId,
-          error: verificationError
-        });
-        
-        // Clear corrupted cache and show error
-        await this.clearCorruptedModelAndRetry();
-        
-        const verificationErrorText = `🔒 MODEL INTEGRITY CHECK FAILED!\n\n` +
-          `The downloaded model "${this.modelId}" appears to be corrupted.\n\n` +
-          `🚨 This could indicate:\n` +
-          `   • Network corruption during download\n` +
-          `   • Modified or tampered model files\n` +
-          `   • CDN serving incorrect data\n\n` +
-          `🔧 Automatic action taken:\n` +
-          `   • Corrupted cache has been cleared\n` +
-          `   • Please refresh the page to re-download\n\n` +
-          `⚠️  For security reasons, Keel cannot use unverified models.`;
-        
-        this.onUpdate(verificationErrorText);
-        throw new Error(verificationErrorText);
-      }
-    } catch (error) {
-      // LOUD AND OBTRUSIVE ERROR REPORTING
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isTimeout = errorMessage.includes('timed out');
-      const isNetworkError = errorMessage.includes('fetch') || errorMessage.includes('network');
-      
-      logger.error("llm", "[ENGINE] CRITICAL ERROR", { 
-        modelId: this.modelId,
-        error: errorMessage,
-        isTimeout,
-        isNetworkError,
-        totalTime: Date.now() - initStartTime,
-        networkActivityDetected,
-        errorType: error?.constructor?.name
-      });
-      
-      let loudError = `❌ CRITICAL ERROR: Failed to load model "${this.modelId}"!\n\n`;
-      
-      if (isTimeout) {
-        loudError += `🕐 INITIALIZATION TIMEOUT: The model initialization took too long.\n`;
-        loudError += `   • This often happens during WebGPU shader compilation\n`;
-        loudError += `   • Check browser console for WebGPU errors\n`;
-        loudError += `   • Try disabling hardware acceleration in browser settings\n`;
-        loudError += `   • Refresh the page and try again\n`;
-        loudError += `   • Network activity detected: ${networkActivityDetected ? 'YES' : 'NO'}\n\n`;
-      } else if (isNetworkError) {
-        loudError += `🌐 NETWORK ERROR: Failed to download model files.\n`;
-        loudError += `   • Check your internet connection\n`;
-        loudError += `   • Verify you're not behind a restrictive firewall\n`;
-        loudError += `   • Try disabling VPN or proxy\n`;
-        loudError += `   • Check if CDN (huggingface.co) is accessible\n\n`;
-      } else {
-        loudError += `💥 UNKNOWN ERROR: ${errorMessage}\n\n`;
-      }
-      
-      loudError += `📊 MODEL DETAILS:\n`;
-      loudError += `   • Model: ${this.modelId}\n`;
-      loudError += `   • Size: ~${CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId)?.vram_required_MB || 'Unknown'}MB\n\n`;
-      
-      loudError += `🔧 TROUBLESHOOTING STEPS:\n`;
-      loudError += `   1. Open browser DevTools (F12) and check Console tab\n`;
-      loudError += `   2. Look for WebGPU or WASM errors\n`;
-      loudError += `   3. Refresh the page and try again\n`;
-      loudError += `   4. Clear browser cache and storage\n`;
-      loudError += `   5. Try a different browser (Chrome/Edge recommended)\n`;
-      loudError += `   6. Ensure you have sufficient disk space (>5GB)\n\n`;
-      
-      loudError += `⚠️  THIS ERROR PREVENTS KEEL FROM FUNCTIONING!\n`;
-      loudError += `   The model must be successfully downloaded to use AI features.`;
-      
-      // Show the error prominently
-      this.onUpdate(loudError);
-      
-      // Re-throw with more context
-      throw new Error(loudError);
-    } finally {
-      // Always clear the timeouts to prevent memory leaks
-      logger.debug("llm", "[ENGINE] Cleaning up timeouts", { modelId: this.modelId });
-      
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      if (absoluteTimeoutId) {
-        clearTimeout(absoluteTimeoutId);
-      }
-    }
+
+    logger.info("llm", "Starting engine creation with WebLLM", { modelId: this.modelId });
     
-    logger.info("llm", "[ENGINE] ServiceWorkerMLCEngine initialization complete", {
-      modelId: this.modelId,
-      totalTime: Date.now() - initStartTime,
-      networkActivityDetected
-    });
+    // Use standard MLCEngine - most reliable for model downloads
+    let enginePromise: Promise<webllm.MLCEngine>;
+    try {
+      logger.debug("llm", "Attempting CreateMLCEngine creation");
+      enginePromise = webllm.CreateMLCEngine(this.modelId, engineConfig);
+      logger.debug("llm", "MLCEngine promise created");
+    } catch (createError) {
+      logger.error("llm", "Failed to create MLCEngine", { error: createError });
+      throw createError;
+    }
+
+      this.engine = await Promise.race([
+        enginePromise,
+        timeoutPromise,
+        absolutePromise
+      ]) as webllm.MLCEngine;
+
+      if (!this.engine) {
+        throw new Error("Engine initialization returned undefined");
+      }
+
+      this.onUpdate("✅ Model loaded and ready!");
+      logger.info("llm", "LLM Engine initialized successfully", {
+        modelId: this.modelId,
+        durationMs: Date.now() - initStartTime
+      });
+
+    } catch (error: any) {
+      const errorMessage = mapError(error, this.modelId);
+      logger.error("llm", "Engine initialization failed", { error: errorMessage });
+      this.onUpdate(`❌ Critical Error: ${errorMessage}`);
+      throw new Error(errorMessage);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (absoluteTimeoutId) clearTimeout(absoluteTimeoutId);
+    }
   }
+
 
   
   async generate(prompt: string, options: GenerateOptions = {}) {
@@ -2220,11 +987,14 @@ export class LocalLLMEngine implements ILLMEngine {
     const startTime = performance.now();
 
     try {
-      const chunks = await this.engine.chat.completions.create({
+      const result = await this.engine.chat.completions.create({
         messages,
         stream: true,
         ...config?.recommended_config
       });
+
+      // result is an AsyncIterable when stream is true
+      const chunks = result as unknown as AsyncIterable<webllm.ChatCompletionChunk>;
 
       let fullText = "";
       for await (const chunk of chunks) {

@@ -5,6 +5,8 @@ vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
   const actual = await importOriginal() as any;
   return {
     ...actual,
+    modelLibURLPrefix: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/",
+    modelVersion: "v0_2_80",
     prebuiltAppConfig: actual.prebuiltAppConfig || { model_list: [] },
   };
 })

@@ -29,6 +29,60 @@ vi.mock('../storage/skills', () => ({
   }
 }))
 
+// Mock fetch for skills loading
+global.fetch = vi.fn().mockImplementation((url: string) => {
+  if (url.includes('index.json')) {
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ skills: ['calculator', 'analyze-data'] })
+    } as Response)
+  }
+  
+  // Mock SKILL.md content for calculator and analyze-data
+  if (url.includes('calculator/SKILL.md')) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(`---
+name: calculator
+description: A simple calculator skill that evaluates mathematical expressions
+tags: [math, utility]
+---
+
+# Calculator Skill
+
+Evaluates mathematical expressions.
+
+## Usage
+
+<skill name="calculator">{"expression": "2 + 2"}</skill>`)
+    } as Response)
+  }
+  
+  if (url.includes('analyze-data/SKILL.md')) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(`---
+name: analyze-data
+description: Analyzes data using Python
+tags: [data, analysis]
+---
+
+# Data Analysis Skill
+
+Analyzes data using Python.)
+
+## Usage
+
+<skill name="analyze-data">{"data": [1, 2, 3]}</skill>`)
+    } as Response)
+  }
+  
+  return Promise.resolve({
+    ok: false,
+    status: 404
+  } as Response)
+})
+
 // Mock Python runtime
 const mockPythonRuntime: PythonRuntime = {
   execute: vi.fn(),
@@ -58,7 +112,7 @@ describe('SkillsEngine', () => {
     vi.mocked(storageModule.skillStorage.getAllSkills).mockResolvedValue(mockSkills)
     
     await skillsEngine.init()
-    skillsEngine.registerBuiltInSkills()
+    await skillsEngine.registerBuiltInSkills()
     
     expect(skillsEngine.getAvailableSkillsMetadata()).toContainEqual(
       expect.objectContaining({ name: 'calculator' })

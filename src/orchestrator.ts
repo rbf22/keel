@@ -5,9 +5,10 @@ import { PythonRuntime } from "./python-runtime";
 import { skillsEngine } from "./skills/engine";
 import { AgentResponse } from "./types";
 import { storage } from "./storage";
+import { PlanExecutor } from "./plan-executor";
 
 // Code artifact interface for context sharing between skills
-interface CodeArtifact {
+export interface CodeArtifact {
   id: string;
   name: string;
   description: string;
@@ -40,6 +41,34 @@ interface ReviewResult {
   recommendation: 'approved' | 'needs_fixes' | 'rejected';
 }
 
+// Planning interfaces for structured task execution
+export interface Subtask {
+  id: string;
+  description: string;
+  requirements: string[];
+  assignedSkill?: string;
+  status: 'pending' | 'in_progress' | 'complete' | 'blocked' | 'failed';
+  dependencies: string[];  // other subtask_ids
+  successCriteria: string;
+  result?: any;
+}
+
+export interface ExecutionPlan {
+  id: string;
+  userRequest: string;
+  subtasks: Subtask[];
+  status: 'planning' | 'executing' | 'reviewing' | 'complete' | 'failed';
+  createdAt: Date;
+  currentFocus?: string;  // which subtask_id is being worked on
+}
+
+export interface SharedContext {
+  plan: ExecutionPlan;
+  artifacts: CodeArtifact[];
+  results: Map<string, any>;  // subtask_id -> result
+  skillHistory: string[];  // track which skills have been used
+}
+
 export class AgentOrchestrator {
   // private engine: LLMEngine; // Currently unused in skill-based architecture
   private python: PythonRuntime;
@@ -58,10 +87,22 @@ export class AgentOrchestrator {
   
   // Code artifact context sharing
   private currentArtifact: CodeArtifact | null = null;
+  
+  // Plan-based execution context
+  private sharedContext: SharedContext | null = null;
+  private planExecutor: PlanExecutor;
 
   constructor(_engine: LLMEngine, python: PythonRuntime) {
     // this.engine = engine; // Currently unused in skill-based architecture
     this.python = python;
+    this.planExecutor = new PlanExecutor(python);
+  }
+
+  /**
+   * Get current shared context (for debugging and monitoring)
+   */
+  getCurrentSharedContext(): SharedContext | null {
+    return this.sharedContext;
   }
   
   /**
@@ -320,6 +361,148 @@ export class AgentOrchestrator {
       return this.chatHistory;
     }
     
+    logger.info("orchestrator", "Starting plan-based task execution", { 
+      userRequest, 
+      requestLength: userRequest.length 
+    });
+    
+    // Reset state for fresh task
+    this.resetLoopDetection();
+    this.chatHistory = [];
+
+    // Add user request to chat history
+    this.chatHistory.push({ role: "user", content: userRequest });
+    
+    // Use plan-based execution
+    return await this.runPlanBasedTask(userRequest, onUpdate, signal);
+  }
+
+  /**
+   * Plan-based task execution using PlanExecutor
+   */
+  private async runPlanBasedTask(userRequest: string, onUpdate: (response: AgentResponse) => void, signal?: AbortSignal): Promise<ChatCompletionMessageParam[]> {
+    logger.info("orchestrator", "Starting with task-planning phase");
+    
+    // Phase 1: Generate execution plan
+    onUpdate({ 
+      personaId: "system", 
+      content: "Creating execution plan...",
+      type: undefined
+    });
+
+    const planningResult = await this.executeSkillMethod('task-planning', { task: userRequest });
+    this.chatHistory.push({ role: "assistant", content: planningResult });
+    
+    onUpdate({ 
+      personaId: "task-planning", 
+      content: planningResult,
+      type: undefined
+    });
+
+    // Parse the plan
+    const plan = this.planExecutor.parsePlan(planningResult, userRequest);
+    if (!plan) {
+      logger.error("orchestrator", "Failed to parse execution plan, falling back to legacy method");
+      return await this.runLegacyTask(userRequest, onUpdate, signal);
+    }
+
+    logger.info("orchestrator", `Parsed plan with ${plan.subtasks.length} subtasks`);
+    
+    // Phase 2: Execute the plan
+    const context = this.planExecutor.createSharedContext(plan);
+    this.sharedContext = context;
+
+    onUpdate({ 
+      personaId: "system", 
+      content: `Executing plan with ${plan.subtasks.length} subtasks...`,
+      type: undefined
+    });
+
+    let subtaskCount = 0;
+    const maxSubtasks = 20; // Prevent infinite loops
+
+    while (!this.planExecutor.isPlanComplete(context) && subtaskCount < maxSubtasks) {
+      if (signal?.aborted) {
+        logger.info("orchestrator", "Task aborted by signal");
+        throw new Error("Task aborted");
+      }
+
+      // Select next subtask
+      const nextSubtask = this.planExecutor.selectNextSubtask(context);
+      if (!nextSubtask) {
+        logger.warn("orchestrator", "No ready subtasks found, breaking");
+        break;
+      }
+
+      // Select skill for subtask
+      const selectedSkill = this.planExecutor.selectSkillForSubtask(nextSubtask, context);
+      
+      logger.info("orchestrator", `Executing subtask ${nextSubtask.id} with skill ${selectedSkill}`, {
+        subtaskDescription: nextSubtask.description
+      });
+
+      onUpdate({ 
+        personaId: "system", 
+        content: `Executing: ${nextSubtask.description}`,
+        type: undefined
+      });
+
+      // Execute the subtask
+      const executionResult = await this.planExecutor.executeSubtask(nextSubtask, selectedSkill, context);
+      
+      // Update context
+      this.planExecutor.updateContext(context, nextSubtask, executionResult);
+      
+      // Report result
+      onUpdate({ 
+        personaId: selectedSkill, 
+        content: executionResult.result,
+        type: undefined
+      });
+
+      // Add to chat history
+      this.chatHistory.push({ role: "assistant", content: `Subtask ${nextSubtask.id}: ${executionResult.result}` });
+      
+      subtaskCount++;
+    }
+
+    // Phase 3: Synthesize final result
+    const finalResult = this.planExecutor.synthesizeResult(context);
+    
+    onUpdate({ 
+      personaId: "system", 
+      content: finalResult,
+      type: undefined
+    });
+
+    this.chatHistory.push({ role: "assistant", content: finalResult });
+
+    logger.info("orchestrator", "Plan-based task execution completed", {
+      subtaskCount,
+      planComplete: this.planExecutor.isPlanComplete(context)
+    });
+
+    return this.chatHistory;
+  }
+
+  /**
+   * Legacy task execution method (fallback)
+   */
+  private async runLegacyTask(userRequest: string, onUpdate: (response: AgentResponse) => void, signal?: AbortSignal): Promise<ChatCompletionMessageParam[]> {
+    // Validate inputs
+    this.validateInputs(userRequest, onUpdate);
+    
+    // Check for artifact commands first
+    logger.info('orchestrator', 'Checking for artifact command', { userRequest });
+    const artifactResult = await this.handleArtifactCommand(userRequest);
+    if (artifactResult !== null) {
+      logger.info('orchestrator', 'Artifact command detected, returning result', { artifactResult });
+      // Return the artifact command result
+      this.chatHistory.push({ role: "user", content: userRequest });
+      this.chatHistory.push({ role: "assistant", content: artifactResult });
+      return this.chatHistory;
+    }
+    
     logger.info("orchestrator", "Starting skill-based task execution", { 
       userRequest, 
       requestLength: userRequest.length 
@@ -479,18 +662,9 @@ export class AgentOrchestrator {
             taskComplete = true;
           }
         } catch (e) {
-          // If not JSON, use legacy logic
-          if (result.toLowerCase().includes('approved')) {
-            taskComplete = true;
-          } else if (result.toLowerCase().includes('rejected') && result.toLowerCase().includes('no output')) {
-            currentSkill = 'python-coding';
-            taskInstruction = `Try a different approach for: ${userRequest}`;
-          } else if (result.toLowerCase().includes('rejected')) {
-            currentSkill = 'python-coding';
-            taskInstruction = `Fix the code based on review: ${result}`;
-          } else {
-            taskComplete = true;
-          }
+          logger.error("orchestrator", "Failed to parse review result", { error: e });
+          // Fall back to completion
+          taskComplete = true;
         }
       } else if (currentSkill === 'task-planning') {
         // After planning, proceed with research or coding based on plan

@@ -1,4 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Mock web-llm before importing llm.ts
+vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
+  const actual = await importOriginal() as any;
+  return {
+    ...actual,
+    modelLibURLPrefix: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/",
+    modelVersion: "v0_2_80",
+    prebuiltAppConfig: actual.prebuiltAppConfig || { model_list: [] },
+  };
+})
 
 describe('Model configuration verification', () => {
   it('should include SmolLM2 in supported models', async () => {
@@ -23,7 +34,7 @@ describe('Model configuration verification', () => {
     
     const smolLM2 = CUSTOM_APP_CONFIG.model_list.find(m => m.model_id === 'SmolLM2-360M-Instruct-q4f16_1-MLC');
     expect(smolLM2).toBeDefined();
-    expect(smolLM2?.model).toBe('https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC');
+    expect(smolLM2?.model).toBe('https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/');
     expect(smolLM2?.model_lib).toContain('SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm');
   });
 });

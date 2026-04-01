@@ -1,0 +1,325 @@
+
+> keel@0.1.0 test
+> vitest run --run
+
+
+ RUN  v2.1.9 /Users/robert_fenwick/SWE/keel/keel
+
+ ✓ src/orchestrator.skill-based.test.ts (15 tests) 70ms
+ ✓ src/utils/secure-web-fetcher.sanitization.test.ts (15 tests) 500ms
+ ✓ src/storage/skills.transaction-safety.test.ts (9 tests) 533ms
+   ✓ SkillStorage - Transaction Safety > should handle large number of skills efficiently 366ms
+ ✓ src/python-runtime.resource-cleanup.test.ts (9 tests) 514ms
+ ✓ src/tests/code-artifacts.test.ts (27 tests) 1005ms
+   ✓ Agent Architecture - Code Artifacts > VFS and Context Tab Functionality > VFS Tool Operations > should write files via vfs_write tool 334ms
+ ❯ src/tests/agent-architecture.puppeteer.test.ts (10 tests | 10 skipped) 10090ms
+ ✓ src/utils/handler-manager.test.ts (23 tests) 179ms
+ ✓ src/orchestrator.skill-core.test.ts (12 tests) 264ms
+ ✓ src/skills/level3.integration.test.ts (4 tests) 77ms
+ ✓ src/llm.simple.test.ts (15 tests) 129ms
+ ✓ src/storage/skills.test.ts (9 tests) 834ms
+ ✓ src/storage.test.ts (10 tests) 462ms
+ ✓ src/types.test.ts (12 tests) 80ms
+ ✓ src/skills/parser.yaml-edge-cases.test.ts (15 tests) 170ms
+ ✓ src/logger.memory-limits.test.ts (9 tests) 569ms
+   ✓ Logger - Memory Limits > should preserve log order when trimming 484ms
+ ❯ src/skills/engine.test.ts (9 tests | 1 failed) 303ms
+   × SkillsEngine > should initialize and register built-in skills metadata 101ms
+     → expected [] to deep equally contain ObjectContaining {"name": "calculator"}
+(node:84888) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/llm.abort.test.ts (5 tests) 629ms
+   ✓ LLM Abort Support > LocalLLMEngine > should abort local generation when signal is already aborted 321ms
+ ❯ src/tests/agent-architecture.test.ts (10 tests | 10 failed) 25526ms
+   × Agent Architecture - Code Artifact Workflow > should create code artifact for math calculation 1893ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should review code artifact and provide structured feedback 1305ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should execute approved artifact and return result 1731ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should handle data analysis task workflow 1462ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should handle rejected code artifacts with feedback loop 1589ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should prevent infinite loops with cycle detection 1503ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should handle task planning for complex workflows 1412ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should maintain artifact context between skills 974ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should handle file operation tasks safely 1135ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+   × Agent Architecture - Code Artifact Workflow > should display proper error handling for invalid requests 1220ms
+     → net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+ ✓ src/skills/downloader.test.ts (12 tests) 115ms
+ ✓ src/skills/parser.test.ts (9 tests) 175ms
+ ✓ src/storage/indexeddb-wrapper.test.ts (7 tests) 94ms
+ ✓ src/storage/models.test.ts (6 tests) 216ms
+ ✓ src/python-runtime.concurrency.test.ts (3 tests) 384ms
+(node:84922) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ src/llm.init.test.ts (2 tests | 2 failed) 254ms
+   × LocalLLMEngine Initialization Diagnostics > should include modelId in error message when CreateServiceWorkerMLCEngine fails 220ms
+     → expected [Function] to throw error including 'Failed to fetch' but got 'ServiceWorker API not available'
+   × LocalLLMEngine Initialization Diagnostics > should report specific error message for non-fetch errors 31ms
+     → expected [Function] to throw error including 'GPU out of memory' but got 'ServiceWorker API not available'
+ ✓ src/skills/llm-converter.test.ts (6 tests) 2095ms
+   ✓ LLMConverter > should handle conversion failures with retry 1042ms
+   ✓ LLMConverter > should throw error after max retries 1037ms
+ ✓ src/utils/secure-web-fetcher.extract-content.test.ts (8 tests) 22ms
+ ✓ src/skills/parser.validation.test.ts (7 tests) 166ms
+ ✓ src/tools.test.ts (6 tests) 159ms
+ ✓ src/python-runtime.test.ts (4 tests) 25ms
+(node:84933) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ src/llm.config.test.ts (6 tests | 1 failed) 158ms
+   × LLM Configuration > should sync SUPPORTED_MODELS with CUSTOM_MODEL_LIST 57ms
+     → expected 19 to be 5 // Object.is equality
+(node:84937) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/llm.diagnostic.test.ts (5 tests) 29ms
+ ❯ src/skills-loading-debug.test.ts (0 test)
+ ❯ src/tests/model-config.test.ts (2 tests | 2 failed) 47ms
+   × Model configuration verification > should include SmolLM2 in supported models 45ms
+     → [vitest] No "modelLibURLPrefix" export is defined on the "@mlc-ai/web-llm" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+   × Model configuration verification > should have correct app config structure 1ms
+     → [vitest] No "modelLibURLPrefix" export is defined on the "@mlc-ai/web-llm" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+ ✓ src/tests/model-urls-simple.test.ts (1 test) 867ms
+   ✓ Model URL verification > should have correct URL structure for SmolLM2 866ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/skills-loading-debug.test.ts [ src/skills-loading-debug.test.ts ]
+Error: Failed to resolve import "@playwright/test" from "src/skills-loading-debug.test.ts". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/robert_fenwick/SWE/keel/keel/src/skills-loading-debug.test.ts:1:29
+  1  |  import { test } from "@playwright/test";
+     |                        ^
+  2  |  test.describe("Skills Loading Debug", () => {
+  3  |    test("should load skills from filesystem and execute successfully", async ({ page }) => {
+ ❯ TransformPluginContext._formatError node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:49258:41
+ ❯ TransformPluginContext.error node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:49253:16
+ ❯ normalizeUrl node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:64307:23
+ ❯ node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:64439:39
+ ❯ TransformPluginContext.transform node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:64366:7
+ ❯ PluginContainer.transform node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:49099:18
+ ❯ loadAndTransform node_modules/vitest/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51978:27
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/19]⎯
+
+ FAIL  src/tests/agent-architecture.puppeteer.test.ts > Agent Architecture - Code Artifact Workflow
+Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/19]⎯
+
+ FAIL  src/tests/agent-architecture.puppeteer.test.ts > Agent Architecture - Code Artifact Workflow
+TypeError: Cannot read properties of undefined (reading 'close')
+ ❯ src/tests/agent-architecture.puppeteer.test.ts:41:19
+     39| 
+     40|   afterAll(async () => {
+     41|     await browser.close();
+       |                   ^
+     42|   });
+     43| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/19]⎯
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 16 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/llm.config.test.ts > LLM Configuration > should sync SUPPORTED_MODELS with CUSTOM_MODEL_LIST
+AssertionError: expected 19 to be 5 // Object.is equality
+
+- Expected
++ Received
+
+- 5
++ 19
+
+ ❯ src/llm.config.test.ts:48:37
+     46| 
+     47|   it('should sync SUPPORTED_MODELS with CUSTOM_MODEL_LIST', () => {
+     48|     expect(SUPPORTED_MODELS.length).toBe(CUSTOM_MODEL_LIST.length)
+       |                                     ^
+     49|     CUSTOM_MODEL_LIST.forEach((m, i) => {
+     50|       expect(SUPPORTED_MODELS[i].modelId).toBe(m.model_id)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/19]⎯
+
+ FAIL  src/llm.init.test.ts > LocalLLMEngine Initialization Diagnostics > should include modelId in error message when CreateServiceWorkerMLCEngine fails
+AssertionError: expected [Function] to throw error including 'Failed to fetch' but got 'ServiceWorker API not available'
+
+Expected: "Failed to fetch"
+Received: "ServiceWorker API not available"
+
+ ❯ src/llm.init.test.ts:55:5
+     53|     ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(fe…
+     54| 
+     55|     await expect(engine.init()).rejects.toThrow('Failed to fetch')
+       |     ^
+     56|     
+     57|     expect(webllm.CreateServiceWorkerMLCEngine).toHaveBeenCalledWith(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/19]⎯
+
+ FAIL  src/llm.init.test.ts > LocalLLMEngine Initialization Diagnostics > should report specific error message for non-fetch errors
+AssertionError: expected [Function] to throw error including 'GPU out of memory' but got 'ServiceWorker API not available'
+
+Expected: "GPU out of memory"
+Received: "ServiceWorker API not available"
+
+ ❯ src/llm.init.test.ts:72:5
+     70|     ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(ot…
+     71| 
+     72|     await expect(engine.init()).rejects.toThrow('GPU out of memory')
+       |     ^
+     73|     
+     74|     expect(webllm.CreateServiceWorkerMLCEngine).toHaveBeenCalledWith(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/19]⎯
+
+ FAIL  src/skills/engine.test.ts > SkillsEngine > should initialize and register built-in skills metadata
+AssertionError: expected [] to deep equally contain ObjectContaining {"name": "calculator"}
+
+- Expected: 
+ObjectContaining {
+  "name": "calculator",
+}
+
++ Received: 
+Array []
+
+ ❯ src/skills/engine.test.ts:63:55
+     61|     skillsEngine.registerBuiltInSkills()
+     62|     
+     63|     expect(skillsEngine.getAvailableSkillsMetadata()).toContainEqual(
+       |                                                       ^
+     64|       expect.objectContaining({ name: 'calculator' })
+     65|     )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/19]⎯
+
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should create code artifact for math calculation
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should review code artifact and provide structured feedback
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should execute approved artifact and return result
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should handle data analysis task workflow
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should handle rejected code artifacts with feedback loop
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should prevent infinite loops with cycle detection
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should handle task planning for complex workflows
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should maintain artifact context between skills
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should handle file operation tasks safely
+ FAIL  src/tests/agent-architecture.test.ts > Agent Architecture - Code Artifact Workflow > should display proper error handling for invalid requests
+Error: net::ERR_CONNECTION_REFUSED at http://localhost:5174/keel/
+ ❯ navigate node_modules/puppeteer-core/src/cdp/Frame.ts:211:13
+ ❯ Deferred.race node_modules/puppeteer-core/src/util/Deferred.ts:49:14
+ ❯ CdpFrame.goto node_modules/puppeteer-core/src/cdp/Frame.ts:164:17
+ ❯ CdpPage.goto node_modules/puppeteer-core/src/api/Page.ts:1773:12
+ ❯ src/tests/agent-architecture.test.ts:21:5
+     19|   beforeEach(async () => {
+     20|     page = await browser.newPage();
+     21|     await page.goto('http://localhost:5174/keel/');
+       |     ^
+     22|     await page.waitForLoadState('networkidle');
+     23|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/19]⎯
+
+ FAIL  src/tests/model-config.test.ts > Model configuration verification > should include SmolLM2 in supported models
+ FAIL  src/tests/model-config.test.ts > Model configuration verification > should have correct app config structure
+Error: [vitest] No "modelLibURLPrefix" export is defined on the "@mlc-ai/web-llm" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+vi.mock(import("@mlc-ai/web-llm"), async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    // your mocked methods
+  }
+})
+
+ ❯ src/llm.ts:148:23
+    146|     model_id: "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC", 
+    147|     model: "https://huggingface.co/mlc-ai/TinyLlama-1.1B-Chat-v0.4-q4f…
+    148|     model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Tiny…
+       |                       ^
+    149|     vram_required_MB: 0,
+    150|     required_features: [],
+ ❯ src/tests/model-config.test.ts:6:34
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/19]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 2 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Failed to parse URL from /keel/src/skills/index.json
+ ❯ node:internal/deps/undici/undici:15845:13
+ ❯ processTicksAndRejections node:internal/process/task_queues:103:5
+ ❯ SkillsEngine.loadSkillsFromFilesystem src/skills/engine.ts:80:22
+     78|   async loadSkillsFromFilesystem(): Promise<void> {
+     79|     // Discover all skill directories by fetching the skills index
+     80|     const response = await fetch('/keel/src/skills/index.json')
+       |                      ^
+     81|     if (!response.ok) {
+     82|       throw new Error(`Failed to load skills index: ${response.status}…
+ ❯ SkillsEngine.registerBuiltInSkills src/skills/engine.ts:74:5
+
+This error originated in "src/skills/engine.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "src/skills/engine.test.ts". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+Caused by: TypeError: Invalid URL: /keel/src/skills/index.json
+ ❯ new URLImpl node_modules/jsdom/node_modules/whatwg-url/lib/URL-impl.js:20:13
+ ❯ Object.exports.setup node_modules/jsdom/node_modules/whatwg-url/lib/URL.js:54:12
+ ❯ new URL node_modules/jsdom/node_modules/whatwg-url/lib/URL.js:115:22
+ ❯ new Request node:internal/deps/undici/undici:10413:25
+ ❯ fetch node:internal/deps/undici/undici:11325:25
+ ❯ fetch node:internal/deps/undici/undici:15843:10
+ ❯ fetch node:internal/bootstrap/web/exposed-window-or-worker:83:12
+ ❯ SkillsEngine.loadSkillsFromFilesystem src/skills/engine.ts:80:28
+ ❯ SkillsEngine.registerBuiltInSkills src/skills/engine.ts:74:16
+ ❯ src/skills/engine.test.ts:61:18
+
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Failed to parse URL from /keel/src/skills/index.json
+ ❯ node:internal/deps/undici/undici:15845:13
+ ❯ processTicksAndRejections node:internal/process/task_queues:103:5
+ ❯ SkillsEngine.loadSkillsFromFilesystem src/skills/engine.ts:80:22
+     78|   async loadSkillsFromFilesystem(): Promise<void> {
+     79|     // Discover all skill directories by fetching the skills index
+     80|     const response = await fetch('/keel/src/skills/index.json')
+       |                      ^
+     81|     if (!response.ok) {
+     82|       throw new Error(`Failed to load skills index: ${response.status}…
+ ❯ SkillsEngine.registerBuiltInSkills src/skills/engine.ts:74:5
+
+This error originated in "src/skills/engine.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "src/skills/engine.test.ts". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+Caused by: TypeError: Invalid URL: /keel/src/skills/index.json
+ ❯ new URLImpl node_modules/jsdom/node_modules/whatwg-url/lib/URL-impl.js:20:13
+ ❯ Object.exports.setup node_modules/jsdom/node_modules/whatwg-url/lib/URL.js:54:12
+ ❯ new URL node_modules/jsdom/node_modules/whatwg-url/lib/URL.js:115:22
+ ❯ new Request node:internal/deps/undici/undici:10413:25
+ ❯ fetch node:internal/deps/undici/undici:11325:25
+ ❯ fetch node:internal/deps/undici/undici:15843:10
+ ❯ fetch node:internal/bootstrap/web/exposed-window-or-worker:83:12
+ ❯ SkillsEngine.loadSkillsFromFilesystem src/skills/engine.ts:80:28
+ ❯ SkillsEngine.registerBuiltInSkills src/skills/engine.ts:74:16
+ ❯ src/skills/engine.test.ts:112:18
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+ Test Files  7 failed | 27 passed (34)
+      Tests  16 failed | 276 passed | 10 skipped (302)
+     Errors  2 errors
+   Start at  13:12:52
+   Duration  53.91s (transform 6.01s, setup 13.38s, collect 16.15s, tests 46.74s, environment 153.57s, prepare 28.96s)
+

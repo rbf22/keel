@@ -314,16 +314,27 @@ export class SkillsEngine {
 
       // Wait for execution with timeout (configurable, default 30 seconds)
       const timeoutMs = context.timeout || 30000;
-      logger.debug('skills', 'Setting up execution timeout', { skillName, timeoutMs });
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          logger.error('skills', 'Skill execution timed out', { skillName, timeoutMs });
+        timeoutId = setTimeout(() => {
           reject(new Error(`Skill execution timeout after ${timeoutMs}ms`))
         }, timeoutMs)
       })
 
       // Race the execution against timeout with proper cleanup
-      await Promise.race([executionPromise, timeoutPromise])
+      try {
+        await Promise.race([executionPromise, timeoutPromise])
+      } catch (error) {
+        // Only log timeout error if it was actually a timeout (not an execution error)
+        if (error instanceof Error && error.message.includes('timeout')) {
+          logger.error('skills', 'Skill execution timed out', { skillName, timeoutMs });
+        }
+        throw error
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+        }
+      }
 
       const result = {
         success: !errorResult,

@@ -10,7 +10,9 @@ export default defineConfig({
     exclude: [
       'node_modules/**',
       'dist/**',
-      '**/agent-system*.test.ts' // Exclude Puppeteer tests from main suite
+      '**/agent-system*.test.ts', // Exclude Puppeteer tests from main suite
+      '**/agent-architecture*.test.ts', // Exclude Puppeteer tests requiring dev server
+      '**/skills-loading-debug.test.ts' // Requires Playwright dependency
     ]
   },
   resolve: {

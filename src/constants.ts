@@ -6,6 +6,11 @@
 export const SW_ACTIVATION_TIMEOUT = 30000; // 30 seconds
 export const SW_CONTROLLER_CLAIM_TIMEOUT = 5000; // 5 seconds
 
+// LLM Engine timeouts
+export const LLM_ENGINE_INIT_TIMEOUT = 600000; // 10 minutes
+export const LLM_ABSOLUTE_TIMEOUT = 900000; // 15 minutes
+export const LLM_INITIAL_PROGRESS_TIMEOUT = 30000; // 30 seconds
+
 // Python runtime
 export const PYTHON_CLEANUP_DELAY = 100; // milliseconds
 

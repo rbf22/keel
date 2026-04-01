@@ -3,7 +3,7 @@ export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 export interface LogEntry {
   timestamp: number;
   level: LogLevel;
-  category: 'llm' | 'python' | 'system' | 'orchestrator' | 'storage' | 'vfs' | 'main' | 'secure-fetch' | 'skills';
+  category: 'llm' | 'python' | 'system' | 'orchestrator' | 'storage' | 'vfs' | 'main' | 'secure-fetch' | 'skills' | 'plan-executor';
   message: string;
   data?: unknown;
 }

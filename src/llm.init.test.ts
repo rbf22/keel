@@ -52,7 +52,9 @@ describe('LocalLLMEngine Initialization Diagnostics', () => {
     const fetchError = new Error('Failed to fetch')
     ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(fetchError)
 
-    await expect(engine.init()).rejects.toThrow('Failed to fetch')
+    // The mapError function transforms 'Failed to fetch' into a user-friendly message
+    await expect(engine.init()).rejects.toThrow('Failed to download model files for')
+    await expect(engine.init()).rejects.toThrow(modelId)
     
     expect(webllm.CreateServiceWorkerMLCEngine).toHaveBeenCalledWith(
       modelId,

@@ -56,10 +56,22 @@ def review_code_artifact(artifact_json):
     
     log(f"Starting code artifact review")
     
+    # Extract JSON from mixed output (logs + JSON)
+    json_start = artifact_json.find('{')
+    json_end = artifact_json.rfind('}')
+    
+    if json_start != -1 and json_end != -1 and json_end > json_start:
+        json_str = artifact_json[json_start:json_end + 1]
+        log(f"Extracted JSON from mixed output")
+    else:
+        json_str = artifact_json
+    
     try:
-        artifact = json.loads(artifact_json)
+        artifact = json.loads(json_str)
     except json.JSONDecodeError:
         return create_error_review("Invalid JSON format for artifact")
+    
+    log(f"Successfully parsed artifact: {artifact.get('name', 'unknown')}")
     
     # Initialize review result
     review = {

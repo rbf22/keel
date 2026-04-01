@@ -13,7 +13,6 @@ import { modelStorage } from './storage/models'
 import { IndexedDBWrapper } from './storage/indexeddb-wrapper'
 import { 
   SW_ACTIVATION_TIMEOUT, 
-  SW_CONTROLLER_CLAIM_TIMEOUT, 
   PYTHON_CLEANUP_DELAY, 
   VFS_PAGE_SIZE, 
   LOG_MAX_ENTRIES, 
@@ -468,7 +467,38 @@ async function refreshVFSDisplay() {
     }
 }
 
-refreshContextBtn.onclick = refreshVFSDisplay;
+refreshContextBtn.onclick = async () => {
+  await refreshVFSDisplay();
+  
+  // DEBUG: Also show PlanExecutor context if available
+  try {
+    // Access orchestrator from global scope
+    const orchestrator = (window as any).orchestrator;
+    if (orchestrator && orchestrator.getCurrentSharedContext) {
+      const context = orchestrator.getCurrentSharedContext();
+      console.log('PlanExecutor context:', context);
+      
+      // Show artifact count in context tab
+      if (context.artifacts && context.artifacts.length > 0) {
+        const artifactDiv = document.createElement('div');
+        artifactDiv.className = 'output-log';
+        artifactDiv.style.marginTop = '10px';
+        artifactDiv.textContent = `Artifacts in context: ${context.artifacts.length}`;
+        vfsContainer.appendChild(artifactDiv);
+        
+        context.artifacts.forEach((artifact: any, index: number) => {
+          const artDiv = document.createElement('div');
+          artDiv.className = 'output-log';
+          artDiv.style.marginLeft = '20px';
+          artDiv.textContent = `${index + 1}. ${artifact.name || 'Unknown'} (${artifact.id})`;
+          vfsContainer.appendChild(artDiv);
+        });
+      }
+    }
+  } catch (e) {
+    console.log('Could not get PlanExecutor context:', e);
+  }
+};
 
 copyLogsBtn.onclick = async () => {
   const logs = logger.getLogs();
@@ -596,8 +626,8 @@ async function updateModelSelectWithCacheStatus() {
     // Update select options
     const options = SUPPORTED_MODELS.map(m => {
       const isCached = cachedModelIds.has(m.modelId);
-      const cachedClass = isCached ? ' cached-model' : '';
-      return `<option value="${m.modelId}" class="${cachedClass}">${m.displayName} (~${m.vramRequiredMB}MB)</option>`;
+      const cachedLabel = isCached ? ' [cached]' : '';
+      return `<option value="${m.modelId}">${m.displayName}${cachedLabel} (~${m.vramRequiredMB}MB)</option>`;
     });
     
     modelSelect.innerHTML = options.join('');
@@ -666,6 +696,7 @@ async function updateModelsDisplay() {
     const totalSize = models.reduce((sum, model) => sum + model.size, 0);
     const totalSizeMB = (totalSize / 1024 / 1024).toFixed(1);
     const corruptedCount = models.filter(m => m.isCorrupted).length;
+    const currentModelId = localStorage.getItem('selectedModelId') || modelSelect.value;
     
     storageUsage.innerHTML = `
       <div class="storage-summary">
@@ -675,14 +706,52 @@ async function updateModelsDisplay() {
       </div>
     `;
     
+    // Show currently active model for inference
+    const currentModel = SUPPORTED_MODELS.find(m => m.modelId === currentModelId);
+    const activeModelHtml = currentModel ? `
+      <div class="active-model-section" style="margin-bottom: 1.5rem; padding: 1rem; border: 2px solid #007AFF; border-radius: 4px; background: rgba(0, 122, 255, 0.1);">
+        <h4 style="margin-top: 0; margin-bottom: 0.5rem; color: #007AFF;">🎯 Active Model for Inference</h4>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>${currentModel.displayName}</strong>
+            <span style="color: #888; font-size: 0.9rem;"> (~${currentModel.vramRequiredMB}MB)</span>
+            <div style="color: #51cf66; font-size: 0.85rem; margin-top: 0.25rem;">✅ Will be used for inference</div>
+          </div>
+        </div>
+      </div>
+    ` : '';
+    
+    // Always show the add model controls
+    const addModelHtml = `
+      <div class="add-model-section" style="margin-bottom: 1.5rem; padding: 1rem; border: 1px solid #333; border-radius: 4px;">
+        <h4 style="margin-top: 0; margin-bottom: 0.75rem;">Cache New Model</h4>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <select id="addModelSelect" style="padding: 0.5rem; flex: 1; min-width: 200px;">
+            ${SUPPORTED_MODELS.map(m => `<option value="${m.modelId}">${m.displayName} (~${m.vramRequiredMB}MB)</option>`).join('')}
+          </select>
+          <button id="addModelBtn" class="button" style="padding: 0.5rem 1rem;">Add Model</button>
+        </div>
+        <p style="color: #888; font-size: 0.85rem; margin-top: 0.5rem; margin-bottom: 0;">
+          Select a model to cache locally for offline use.
+        </p>
+      </div>
+    `;
+    
     if (models.length === 0) {
-      modelsList.innerHTML = '<div class="output-log">No cached models found.</div>';
+      modelsList.innerHTML = activeModelHtml + `
+        <div class="output-log">
+          No cached models found.
+        </div>
+        ${addModelHtml}
+      `;
     } else {
-      modelsList.innerHTML = models.map(model => {
+      const modelsHtml = models.map(model => {
         const sizeMB = (model.size / 1024 / 1024).toFixed(1);
+        const isActive = model.modelId === currentModelId;
         let corruptedText = '';
         let usableText = '';
         let statusClass = '';
+        let actionButton = '';
         
         if (model.isEmpty) {
           corruptedText = ' <span style="color: #ffa500;">(EMPTY CACHE)</span>';
@@ -693,15 +762,20 @@ async function updateModelsDisplay() {
           usableText = '<span style="color: #ff6b6b;">❌ Not usable</span>';
           statusClass = 'corrupted';
         } else {
-          usableText = '<span style="color: #51cf66;">✅ Ready to use</span>';
-          statusClass = 'ready';
+          usableText = `<span style="color: ${isActive ? '#007AFF' : '#51cf66'};">${isActive ? '🎯 ACTIVE' : '✅ Ready to use'}</span>`;
+          statusClass = isActive ? 'active-model' : 'ready';
+          // Add "Set as Active" button for non-active ready models
+          if (!isActive) {
+            actionButton = `<button class="set-active-btn" data-model="${model.modelId}" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.8rem; background: #007AFF; color: white; border: none; border-radius: 4px; cursor: pointer;">Set as Active</button>`;
+          }
         }
         
         return `
-          <div class="model-item ${statusClass}">
-            <div class="model-info">
+          <div class="model-item ${statusClass}" style="${isActive ? 'border: 2px solid #007AFF; background: rgba(0, 122, 255, 0.05);' : ''}">
+            <div class="model-info" style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
               <strong>${model.modelId}</strong>${corruptedText}
               <span class="model-size">${sizeMB} MB</span>
+              ${actionButton}
             </div>
             <div class="model-status">
               ${usableText}
@@ -709,7 +783,79 @@ async function updateModelsDisplay() {
           </div>
         `;
       }).join('');
+      
+      modelsList.innerHTML = activeModelHtml + addModelHtml + '<h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">Cached Models</h4>' + modelsHtml;
     }
+    
+    // Add handler for the add model button (always present now)
+    const addModelBtn = document.getElementById('addModelBtn') as HTMLButtonElement;
+    const addModelSelect = document.getElementById('addModelSelect') as HTMLSelectElement;
+    
+    if (addModelBtn && addModelSelect) {
+      addModelBtn.onclick = async () => {
+        const selectedModelId = addModelSelect.value;
+        if (!selectedModelId) return;
+        
+        addModelBtn.textContent = 'Adding...';
+        addModelBtn.disabled = true;
+        
+        try {
+          // Create a temporary engine to download the model
+          const tempEngine = new LocalLLMEngine(selectedModelId, (msg) => {
+            logger.info('main', `Model cache progress: ${msg}`);
+          });
+          
+          await tempEngine.init();
+          await tempEngine.unload();
+          
+          logger.info('main', `Successfully added model: ${selectedModelId}`);
+          
+          // If this is the first model cached, auto-set it as active
+          const existingModels = await LocalLLMEngine.getAllCachedModels();
+          const readyModels = existingModels.filter(m => !m.isCorrupted && !m.isEmpty);
+          if (readyModels.length === 1) {
+            localStorage.setItem('selectedModelId', selectedModelId);
+            modelSelect.value = selectedModelId;
+            logger.info('main', `Auto-set ${selectedModelId} as active model (first cached model)`);
+          }
+          
+          await updateModelsDisplay();
+          await updateModelSelectWithCacheStatus();
+        } catch (error) {
+          logger.error('main', `Failed to add model: ${selectedModelId}`, { error });
+          alert(`Failed to add model: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          addModelBtn.textContent = 'Add Model';
+          addModelBtn.disabled = false;
+        }
+      };
+    }
+    
+    // Add handlers for "Set as Active" buttons
+    document.querySelectorAll('.set-active-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const modelId = (e.target as HTMLButtonElement).dataset.model!;
+        
+        // Update localStorage and UI
+        localStorage.setItem('selectedModelId', modelId);
+        modelSelect.value = modelId;
+        
+        logger.info('main', `Active model changed to: ${modelId}`);
+        
+        // Refresh display to show updated active status
+        await updateModelsDisplay();
+        await updateModelSelectWithCacheStatus();
+        
+        // Show confirmation
+        const originalText = (e.target as HTMLButtonElement).textContent;
+        (e.target as HTMLButtonElement).textContent = '✓ Active';
+        (e.target as HTMLButtonElement).disabled = true;
+        setTimeout(() => {
+          (e.target as HTMLButtonElement).textContent = originalText;
+          (e.target as HTMLButtonElement).disabled = false;
+        }, 2000);
+      });
+    });
   } catch (error) {
     console.error('Failed to update models display:', error);
     storageUsage.innerHTML = '<div class="output-log">Error loading model info.</div>';
@@ -762,12 +908,12 @@ clearCorruptedBtn.onclick = async () => {
   clearCorruptedBtn.disabled = true;
   
   try {
-    // Clear each corrupted and empty model cache
+    // Clear each corrupted and empty model from IndexedDB
     const allToClear = [...corruptedModels, ...emptyModels];
     for (const model of allToClear) {
-      const cacheKey = `web-llm-${model.modelId}`;
-      await caches.delete(cacheKey);
-      logger.info('main', `Cleared problematic cache: ${model.modelId}`, {
+      const dbName = `webllm:${model.modelId}`;
+      await indexedDB.deleteDatabase(dbName);
+      logger.info('main', `Cleared problematic model from IndexedDB: ${model.modelId}`, {
         reason: model.isEmpty ? 'empty' : 'corrupted'
       });
     }
@@ -836,6 +982,9 @@ function addMessage(text: string, role: 'user' | 'assistant' | 'system') {
 }
 
 function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = pythonOutputEl) {
+  // DEBUG: Always log Python output to console
+  console.log('Python output received:', output);
+  
   if (output.type === 'ready') {
     pythonStatusEl.textContent = 'Ready';
     targetEl.textContent = '';
@@ -881,43 +1030,86 @@ function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = python
   }
 }
 
+// Environment initialization state
+let environmentInitialized = false;
+let environmentInitializing = false;
+
+// Initialize the environment (storage, python, skills) - runs independently of model
+async function initEnvironment(): Promise<void> {
+  if (environmentInitialized || environmentInitializing) {
+    return;
+  }
+  
+  environmentInitializing = true;
+  logger.info('system', 'Initializing environment (storage, python, skills)...');
+  statusEl.textContent = "Setting up environment...";
+  pythonStatusEl.textContent = "Initializing...";
+  
+  try {
+    // Initialize storage
+    await storage.init();
+    
+    // Initialize Python runtime
+    python = new PythonRuntime(handlePythonOutput);
+    await python.init();
+    
+    // Initialize skills engine
+    await skillsEngine.init();
+    await skillsEngine.registerBuiltInSkills();
+    
+    // Refresh displays
+    void refreshSkillsDisplay();
+    void updateStorageUsage();
+    
+    environmentInitialized = true;
+    logger.info('system', 'Environment initialized successfully');
+    statusEl.textContent = "Environment ready - select model";
+    pythonStatusEl.textContent = "Ready";
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error('system', `Environment initialization failed: ${errorMessage}`, { error: err });
+    statusEl.textContent = `Environment Error: ${errorMessage}`;
+    throw err;
+  } finally {
+    environmentInitializing = false;
+  }
+}
+
 initBtn.onclick = async () => {
   console.log('🚀 Initialize button clicked');
   logger.info('main', 'Initialize button clicked by user', { 
     selectedModelId: modelSelect.value,
-    onlineModeEnabled: onlineModeToggle.checked
+    onlineModeEnabled: onlineModeToggle.checked,
+    environmentInitialized
   });
   
   console.log('📦 Selected model:', modelSelect.value);
   console.log('🌐 Online mode:', onlineModeToggle.checked);
   
-  initBtn.disabled = true
-  modelSelect.disabled = true
-  statusEl.textContent = "Initializing..."
-  pythonStatusEl.textContent = "Initializing..."
+  initBtn.disabled = true;
+  modelSelect.disabled = true;
+  statusEl.textContent = "Initializing model...";
   
-  console.log('🔧 UI updated - buttons disabled, status set');
-
   const selectedModelId = modelSelect.value;
   localStorage.setItem('selectedModelId', selectedModelId);
 
   try {
-    console.log('📡 Starting initialization...');
-    logger.info('system', `Initializing storage, python, and engine...`);
+    // Ensure environment is ready first
+    if (!environmentInitialized) {
+      console.log('📡 Starting environment initialization...');
+      await initEnvironment();
+    }
     
-    // Start all major initializations
-    console.log('💾 Initializing storage...');
-    const storagePromise = storage.init();
+    console.log('📡 Starting model initialization...');
+    logger.info('system', `Initializing LLM engine with model: ${selectedModelId}`);
     
     // Explicitly register and wait for service worker BEFORE engine initialization
-    // Web-LLM's ServiceWorkerMLCEngine requires an active service worker to exist
-    if ('serviceWorker' in navigator) {
+    if ('serviceWorker' in navigator && !navigator.serviceWorker.controller) {
       console.log('🔧 Checking service worker support...');
       try {
-        // Use a more robust path resolution that accounts for Vite's base path
         const baseUrl = (import.meta as any).env.BASE_URL || '/';
         const swPath = `${baseUrl}sw.js`;
-          
+        
         console.log(`📡 Registering Service Worker from: ${swPath}`);
         logger.info('system', `Registering Service Worker from: ${swPath}`);
         
@@ -925,101 +1117,41 @@ initBtn.onclick = async () => {
           type: 'module',
           scope: baseUrl 
         });
-        console.log('✅ Service Worker registered:', registration.scope);
-        logger.info('system', 'Service Worker registered successfully', { scope: registration.scope });
         
         // Wait for the service worker to be active
         let worker = registration.installing || registration.waiting || registration.active;
         
-        console.log('🔄 Service Worker states:', {
-          installing: !!registration.installing,
-          waiting: !!registration.waiting,
-          active: !!registration.active
-        });
-        logger.info('system', `Service Worker - installing: ${!!registration.installing}, waiting: ${!!registration.waiting}, active: ${!!registration.active}`);
-        
-        if (worker) {
-          console.log('⚙️ Service Worker current state:', worker.state);
-          logger.info('system', 'Service Worker state:', { state: worker.state });
-          if (worker.state !== 'activated') {
-            console.log('⏳ Waiting for Service Worker activation...');
-            await new Promise<void>((resolve, reject) => {
-              const timeout = setTimeout(() => {
-                console.error('❌ Service Worker activation timed out (30s)');
-                logger.error('system', 'Service Worker activation timed out (30s)');
-                reject(new Error('Service Worker activation timed out (30s)'));
-              }, SW_ACTIVATION_TIMEOUT);
-
-              const stateChangeHandler = (e: Event) => {
-                const target = e.target as ServiceWorker;
-                logger.info('system', `Service Worker state changed: ${target.state}`);
-                if (target.state === 'activated') {
-                  clearTimeout(timeout);
-                  worker?.removeEventListener('statechange', stateChangeHandler);
-                  resolve();
-                } else if (target.state === 'redundant') {
-                  clearTimeout(timeout);
-                  worker?.removeEventListener('statechange', stateChangeHandler);
-                  logger.error('system', 'Service Worker became redundant');
-                  reject(new Error('Service Worker became redundant'));
-                }
-              };
-              worker?.addEventListener('statechange', stateChangeHandler);
-            });
-          }
-        } else {
-          logger.error('system', 'No service worker found after registration');
-        }
-        
-        // Ensure the service worker is controlling the page
-        if (!navigator.serviceWorker.controller) {
-          logger.info('system', 'Waiting for Service Worker controller claim...');
-          let controllerClaimed = false;
-          
-          await new Promise<void>((resolve) => {
+        if (worker && worker.state !== 'activated') {
+          await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
-              if (!controllerClaimed) {
-                logger.warn('system', 'Service Worker controller claim timed out after 5 seconds');
-                // Don't reject - proceed without controller and let LocalLLMEngine handle fallback
+              reject(new Error('Service Worker activation timed out'));
+            }, SW_ACTIVATION_TIMEOUT);
+
+            const stateChangeHandler = (e: Event) => {
+              const target = e.target as ServiceWorker;
+              if (target.state === 'activated') {
+                clearTimeout(timeout);
+                worker?.removeEventListener('statechange', stateChangeHandler);
                 resolve();
+              } else if (target.state === 'redundant') {
+                clearTimeout(timeout);
+                worker?.removeEventListener('statechange', stateChangeHandler);
+                reject(new Error('Service Worker became redundant'));
               }
-            }, SW_CONTROLLER_CLAIM_TIMEOUT);
-
-            navigator.serviceWorker.addEventListener('controllerchange', () => {
-              controllerClaimed = true;
-              clearTimeout(timeout);
-              logger.info('system', 'Service Worker controller claimed');
-              resolve();
-            }, { once: true });
+            };
+            worker?.addEventListener('statechange', stateChangeHandler);
           });
-
-          // Verify controller status after the wait
-          if (navigator.serviceWorker.controller) {
-            logger.info('system', 'Service Worker is active and controlling the page');
-          } else {
-            logger.warn('system', 'Service Worker failed to claim controller - LocalLLMEngine will use WebWorker fallback');
-          }
-        } else {
-          logger.info('system', 'Service Worker is active and controlling the page');
         }
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error('❌ Service Worker registration failed:', errorMsg);
-        logger.warn('system', `Service Worker registration/activation failed: ${errorMsg}. Falling back to WebWorker for LLM.`, { error: err });
-        // Don't throw, let LocalLLMEngine handle the fallback to WebWorker
+        logger.warn('system', 'Service Worker registration failed, using fallback', { error: err });
       }
-    } else {
-      console.warn('⚠️ Service Workers not supported - using WebWorker fallback');
-      logger.warn('system', 'Service Workers are not supported in this browser. Falling back to WebWorker for LLM.');
     }
     
-    console.log('🐍 Initializing Python runtime...');
-    python = new PythonRuntime(handlePythonOutput);
-    const pythonPromise = python.init();
+    // Initialize LLM engine only
     console.log('🤖 Creating LocalLLMEngine...');
     const localEngine = new LocalLLMEngine(selectedModelId, (msg) => {
       console.log('📊 LLM Status:', msg);
-      statusEl.textContent = msg
+      statusEl.textContent = msg;
     });
 
     console.log('🔀 Creating HybridLLMEngine...');
@@ -1028,60 +1160,24 @@ initBtn.onclick = async () => {
     // Apply current settings
     const apiKey = geminiApiKeyInput.value.trim();
     const onlineEnabled = onlineModeToggle.checked;
-    console.log('🌐 Online LLM config:', { apiKey: apiKey ? 'set' : 'not set', onlineEnabled });
     engine.setOnlineConfig(apiKey, onlineEnabled);
 
     console.log('🚀 Starting LLM engine initialization...');
-    const enginePromise = engine.init();
+    await engine.init();
 
-    // Wait for core systems to be ready
-    try {
-      console.log('⏳ Waiting for all systems to be ready...');
-      await Promise.all([storagePromise, pythonPromise, enginePromise]);
-    } catch (err: unknown) {
-      // If any of the core systems fail to initialize, clean up and re-throw
-      if (python) {
-        python.terminate();
-        python = null;
-      }
-      if (engine) {
-        void engine.unload();
-        engine = null;
-      }
-      throw err;
-    }
-    
-    console.log('✅ Core systems ready, initializing skills...');
-    logger.info('system', 'Core systems ready, initializing skills...');
-
-    // Initialize skills engine
-    console.log('🧠 Initializing skills engine...');
-    await skillsEngine.init();
-    console.log('📚 Registering built-in skills...');
-    await skillsEngine.registerBuiltInSkills();
-    console.log(`🎯 Skills loaded: ${skillsEngine.count()} skills available`);
-    logger.info('system', 'Skills engine initialized');
-    
-    // Load skills display
-    console.log('🔄 Refreshing skills display...');
-    void refreshSkillsDisplay();
-    void updateStorageUsage();
-
-    console.log('🎉 Initialization successful!');
-    logger.info('system', 'Initialization successful');
-    statusEl.textContent = "Keel Ready"
-    userInput.disabled = false
-    sendBtn.disabled = false
-    setupControls.style.display = 'none'
-    // Agent controls are now integrated into the main UI
+    console.log('🎉 Model initialization successful!');
+    logger.info('system', 'Model initialization successful');
+    statusEl.textContent = "Keel Ready";
+    userInput.disabled = false;
+    sendBtn.disabled = false;
+    setupControls.style.display = 'none';
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error('❌ Initialization failed:', errorMessage);
-    console.error('🔍 Full error:', err);
-    logger.error('system', `Initialization failed: ${errorMessage}`, { error: err });
-    statusEl.textContent = `Error: ${errorMessage}`
-    initBtn.disabled = false
-    modelSelect.disabled = false
+    logger.error('system', `Model initialization failed: ${errorMessage}`, { error: err });
+    statusEl.textContent = `Error: ${errorMessage}`;
+    initBtn.disabled = false;
+    modelSelect.disabled = false;
   }
 }
 
@@ -1126,6 +1222,10 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
   // Always use skill-based orchestration
   logger.info('main', 'Starting skill-based task execution', { taskId });
   const orchestrator = new AgentOrchestrator(engine, python);
+  
+  // DEBUG: Expose orchestrator to window for debugging
+  (window as any).orchestrator = orchestrator;
+  
   const agentDivs: Record<string, HTMLDivElement> = {};
 
   try {
@@ -1461,3 +1561,15 @@ document.querySelectorAll('.subtab-btn').forEach(btn => {
     }
   })
 })
+
+// Initialize environment on page load (don't wait for model selection)
+initEnvironment().catch(err => {
+  logger.error('system', 'Failed to auto-initialize environment', { error: err });
+});
+
+// Also trigger environment init when model is selected
+modelSelect.addEventListener('change', () => {
+  if (!environmentInitialized && !environmentInitializing) {
+    void initEnvironment();
+  }
+});
