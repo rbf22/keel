@@ -293,7 +293,7 @@ export function mapError(err: unknown, modelId: string): string {
 }
 
 export class LocalLLMEngine implements ILLMEngine {
-  private engine: webllm.ServiceWorkerMLCEngine | null = null;
+  private engine: webllm.ServiceWorkerMLCEngine | webllm.MLCEngine | null = null;
   private onUpdate: (message: string) => void;
   private modelId: string;
   private isGenerating = false;
@@ -316,65 +316,58 @@ export class LocalLLMEngine implements ILLMEngine {
       },
     };
 
-    // Initialize ServiceWorkerMLCEngine
-    this.onUpdate("Initializing Service Worker Engine...");
-    
-    try {
-      // Add timeout wrapper to prevent indefinite hanging
-      const ENGINE_INIT_TIMEOUT = 60000; // 60 seconds
-      
-      logger.info("llm", `Creating ServiceWorkerMLCEngine with ${ENGINE_INIT_TIMEOUT}ms timeout`, { 
-        modelId: this.modelId 
-      });
-      
-      // Create timeout with cleanup capability
-      let timeoutId: number | undefined;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          logger.error("llm", "ServiceWorkerMLCEngine initialization timed out", { 
-            timeout: ENGINE_INIT_TIMEOUT,
-            modelId: this.modelId 
-          });
-          reject(new Error(`ServiceWorkerMLCEngine initialization timed out after ${ENGINE_INIT_TIMEOUT}ms`));
-        }, ENGINE_INIT_TIMEOUT);
-      });
-      
-      // Create the engine using CreateServiceWorkerMLCEngine with timeout
-      try {
-        this.engine = await Promise.race([
-          webllm.CreateServiceWorkerMLCEngine(
-            this.modelId,
-            engineConfig
-          ),
-          timeoutPromise
-        ]);
-      } finally {
-        // Always clear the timeout to prevent memory leaks
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-      }
-      
-      logger.info("llm", `ServiceWorkerMLCEngine initialized successfully: ${this.modelId}`);
-    } catch (error) {
-      // Clean up on error
-      if (this.engine) {
-        try {
-          await this.engine.unload();
-        } catch (unloadError) {
-          logger.warn("llm", "Error during cleanup", { error: unloadError });
-        }
-        this.engine = null;
-      }
-      
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.error("llm", "ServiceWorkerMLCEngine initialization failed", { error });
-      
-      // Re-throw with more context
-      throw new Error(`Failed to initialize ServiceWorkerMLCEngine: ${errorMessage}`);
-    }
+    // Initialize ServiceWorker engine only
+    await this.initServiceWorkerEngine(engineConfig);
   }
 
+  private async initServiceWorkerEngine(engineConfig: webllm.MLCEngineConfig) {
+    this.onUpdate("Initializing Service Worker Engine...");
+    
+    // Add timeout wrapper to prevent indefinite hanging, but allow sufficient time for model downloads
+    const ENGINE_INIT_TIMEOUT = 120000; // 2 minutes - increased for model downloads with caching
+    
+    logger.info("llm", `Creating ServiceWorkerMLCEngine with ${ENGINE_INIT_TIMEOUT}ms timeout`, { 
+      modelId: this.modelId 
+    });
+    
+    // Create timeout with cleanup capability
+    let timeoutId: number | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        logger.error("llm", "ServiceWorkerMLCEngine initialization timed out", { 
+          timeout: ENGINE_INIT_TIMEOUT,
+          modelId: this.modelId 
+        });
+        reject(new Error(`ServiceWorkerMLCEngine initialization timed out after ${ENGINE_INIT_TIMEOUT}ms. This may indicate:\n1. Network connectivity issues\n2. Model download problems\n3. Browser resource limits\n\nTry refreshing the page or check your internet connection.`));
+      }, ENGINE_INIT_TIMEOUT);
+    });
+    
+    // Create the engine using CreateServiceWorkerMLCEngine with timeout
+    try {
+      this.onUpdate("Creating MLCEngine (this may take a moment for first-time downloads)...");
+      this.engine = await Promise.race([
+        webllm.CreateServiceWorkerMLCEngine(
+          this.modelId,
+          engineConfig
+        ),
+        timeoutPromise
+      ]);
+      
+      logger.info("llm", "ServiceWorkerMLCEngine initialized successfully", { 
+        modelId: this.modelId 
+      });
+      this.onUpdate("Engine ready!");
+    } finally {
+      // Always clear the timeout to prevent memory leaks
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+    
+    logger.info("llm", `ServiceWorkerMLCEngine initialized successfully: ${this.modelId}`);
+  }
+
+  
   async generate(prompt: string, options: GenerateOptions = {}) {
     logger.info('llm', 'Local generation request started', { 
       modelId: this.modelId,
@@ -595,11 +588,9 @@ export class HybridLLMEngine implements ILLMEngine {
   private localEngine: LocalLLMEngine;
   private onlineEngine: OnlineLLMEngine | null = null;
   private useOnline: boolean = false;
-  private onFallback: () => void;
 
-  constructor(localEngine: LocalLLMEngine, onFallback: () => void) {
+  constructor(localEngine: LocalLLMEngine) {
     this.localEngine = localEngine;
-    this.onFallback = onFallback;
   }
 
   setOnlineConfig(apiKey: string | null, enabled: boolean) {
@@ -617,16 +608,7 @@ export class HybridLLMEngine implements ILLMEngine {
 
   async generate(prompt: string, options: GenerateOptions) {
     if (this.useOnline && this.onlineEngine) {
-      try {
-        return await this.onlineEngine.generate(prompt, options);
-      } catch (err: unknown) {
-        if (options.signal?.aborted) throw err;
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        logger.warn("llm", `Online engine failed, falling back to local: ${errorMessage}`);
-        this.useOnline = false;
-        this.onFallback();
-        return await this.localEngine.generate(prompt, options);
-      }
+      return await this.onlineEngine.generate(prompt, options);
     }
     return await this.localEngine.generate(prompt, options);
   }

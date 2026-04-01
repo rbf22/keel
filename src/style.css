@@ -82,9 +82,6 @@ body {
 }
 
 .agent-manager { border-left: 4px solid #007aff; }
-.agent-researcher { border-left: 4px solid #5856d6; }
-.agent-reviewer { border-left: 4px solid #34c759; }
-.agent-observer { border-left: 4px solid #ff2d55; }
 .agent-coder { border-left: 4px solid #af52de; }
 
 .switch-label {

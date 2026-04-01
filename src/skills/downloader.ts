@@ -1,6 +1,5 @@
 import { type StoredSkill } from '../storage/skills'
 import { SkillsParser, CodeBlock, JS_to_Python_Converter } from './parser.js'
-import { LLMEngine } from '../llm'
 import { logger } from '../logger'
 
 export interface GitHubRepo {
@@ -25,19 +24,8 @@ export class SkillsDownloader {
     { url: 'https://corsproxy.io/?', name: 'corsproxy', format: 'direct' },
     { url: 'https://cors-anywhere.herokuapp.com/', name: 'cors-anywhere', format: 'direct' }
   ]
-  private static llmEngine: LLMEngine | null = null
 
-  static async setLLMEngine(engine: LLMEngine | null) {
-    this.llmEngine = engine
-    // Update the converter with the new engine
-    if (this.llmEngine) {
-      const { LLMConverter } = await import('./llm-converter')
-      JS_to_Python_Converter.setLLMConverter(new LLMConverter(this.llmEngine))
-    } else {
-      JS_to_Python_Converter.setLLMConverter(null)
-    }
-  }
-  
+    
   // Parse GitHub URL or owner/repo format
   static parseRepoUrl(input: string): GitHubRepo | null {
     // Trim whitespace and remove trailing slashes
@@ -302,44 +290,18 @@ export class SkillsDownloader {
     const url = `${this.GITHUB_API_BASE}/repos/${repo.owner}/${repo.repo}`
     
     // Try direct fetch first
-    try {
-      const response = await fetch(url)
-      if (response.ok) {
-        const data = await response.json()
-        return data.default_branch || 'main'
-      }
-    } catch (error) {
-      // Direct fetch failed, try proxies
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch repository info: ${response.status}`)
     }
     
-    // Try CORS proxies
-    for (const proxy of this.CORS_PROXIES) {
-      try {
-        const proxyUrl = proxy.url + encodeURIComponent(url)
-        const response = await fetch(proxyUrl)
-        
-        if (response.ok) {
-          const data = await response.json()
-          // Use explicit format field to determine parsing strategy
-          if (proxy.format === 'allorigins') {
-            if (data.contents) {
-              const repoData = typeof data.contents === 'string' ? JSON.parse(data.contents) : data.contents
-              return repoData.default_branch || 'main'
-            }
-          } else {
-            // Direct format - data is the response itself
-            if (data.default_branch) {
-              return data.default_branch
-            }
-          }
-        }
-      } catch (error) {
-        continue
-      }
+    const data = await response.json()
+    const defaultBranch = data.default_branch
+    if (!defaultBranch) {
+      throw new Error('Repository does not have a default branch')
     }
     
-    // If all else fails, assume 'main'
-    return 'main'
+    return defaultBranch
   }
   
   // Fetch repository contents with CORS handling

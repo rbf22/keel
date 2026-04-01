@@ -13,7 +13,8 @@
     "test:coverage": "vitest --coverage",
     "test:agent": "vitest run src/agent-system.unit.test.ts",
     "test:agent:debug": "vitest run src/agent-system.unit.test.ts --reporter=verbose",
-    "test:agent:e2e": "vitest run src/agent-system.test.ts"
+    "test:agent:e2e": "vitest run src/agent-system.test.ts",
+    "skills:index": "./generate-skills-index.sh"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.82",

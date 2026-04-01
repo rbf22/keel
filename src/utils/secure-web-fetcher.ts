@@ -165,14 +165,11 @@ export class SecureWebFetcher {
         if (doc.body) {
           sanitized = doc.body.innerHTML;
         } else if (doc.documentElement && doc.documentElement.textContent) {
-          // Fallback to text content when body is not available
-          // Note: This loses HTML structure but provides safe text content
           sanitized = doc.documentElement.textContent;
         }
-        // If both are null, keep the regex-sanitized content
       } catch (error) {
-        // If DOMParser fails, fall back to regex-sanitized content
-        logger.warn('secure-fetch', 'DOMParser sanitization failed, using regex fallback', { error });
+        // If DOMParser fails, throw error instead of falling back
+        throw new Error(`DOMParser sanitization failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     

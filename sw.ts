@@ -17,10 +17,18 @@ self.addEventListener("install", () => {
 });
 
 self.addEventListener("activate", function (event) {
-  handler = new ServiceWorkerMLCEngineHandler();
-  console.log("Service Worker is ready");
-  (event as any).waitUntil((self as any).clients.claim());
-  console.info("Service Worker: Activated and Claimed");
+  console.log("Service Worker activating");
+  
+  // Initialize handler without clearing caches
+  (event as any).waitUntil(
+    Promise.resolve().then(() => {
+      handler = new ServiceWorkerMLCEngineHandler();
+      console.log("Service Worker handler initialized");
+      return (self as any).clients.claim();
+    }).then(() => {
+      console.info("Service Worker: Activated and Claimed");
+    })
+  );
 });
 
 // Add message listener for debugging with proper cleanup

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skills Discovery Test</title>
+</head>
+<body>
+    <h1>Skills Discovery Test</h1>
+    <div id="logs"></div>
+    
+    <script type="module">
+        const logs = document.getElementById('logs');
+        
+        function log(message) {
+            console.log(message);
+            const div = document.createElement('div');
+            div.textContent = `[${new Date().toISOString()}] ${message}`;
+            logs.appendChild(div);
+        }
+
+        async function testSkillsDiscovery() {
+            try {
+                log('Testing skills discovery system...');
+                
+                // Test 1: Check if skills index exists
+                log('1. Testing skills index access...');
+                const indexResponse = await fetch('/src/skills/index.json');
+                if (indexResponse.ok) {
+                    const index = await indexResponse.json();
+                    log(`✅ Skills index loaded with ${index.skills.length} skills:`);
+                    index.skills.forEach(skill => log(`   - ${skill}`));
+                } else {
+                    log('❌ Skills index not found, will use fallback');
+                }
+                
+                // Test 2: Load skills engine
+                log('2. Initializing skills engine...');
+                const { skillsEngine } = await import('/src/skills/engine.js?t=20260401');
+                
+                await skillsEngine.init();
+                log('✅ Skills engine initialized');
+                
+                // Test 3: Register built-in skills
+                log('3. Registering built-in skills...');
+                skillsEngine.registerBuiltInSkills();
+                log('✅ Built-in skills registered');
+                
+                // Test 4: Load skills from filesystem
+                log('4. Loading skills from filesystem...');
+                await skillsEngine.loadSkillsFromFilesystem();
+                log('✅ Skills loaded from filesystem');
+                
+                // Test 5: Get all available skills
+                log('5. Getting available skills...');
+                const skills = skillsEngine.getAvailableSkillsMetadata();
+                
+                log(`🎉 SUCCESS: Loaded ${skills.length} total skills:`);
+                skills.forEach(skill => {
+                    log(`   - ${skill.name}: ${skill.description.substring(0, 80)}...`);
+                });
+                
+                // Test 6: Test individual skill access
+                log('6. Testing individual skill access...');
+                const researchSkill = skillsEngine.getSkill('research');
+                if (researchSkill) {
+                    log(`✅ Research skill found with ${researchSkill.codeBlocks.length} code blocks`);
+                } else {
+                    log('❌ Research skill not found');
+                }
+                
+            } catch (error) {
+                log(`❌ ERROR: ${error.message}`);
+                console.error('Full error:', error);
+            }
+        }
+        
+        // Start test
+        testSkillsDiscovery();
+    </script>
+</body>
+</html>

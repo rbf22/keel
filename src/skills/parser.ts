@@ -15,7 +15,6 @@ export interface ParsedSkill extends SkillMetadata {
 }
 
 import { type StoredSkill as StorageStoredSkill } from '../storage/skills'
-import { LLMConverter } from './llm-converter'
 import { logger } from '../logger'
 
 export interface CodeBlock {
@@ -401,11 +400,6 @@ export class SkillsParser {
 
 // Convert JavaScript to Python (basic patterns)
 export class JS_to_Python_Converter {
-  private static llmConverter: LLMConverter | null = null
-
-  static setLLMConverter(converter: LLMConverter | null) {
-    this.llmConverter = converter
-  }
 
   private static extractParenContent(str: string, startIdx: number): string {
     // Extract content within matching parentheses, handling nesting
@@ -503,17 +497,7 @@ export class JS_to_Python_Converter {
   }
 
   static async convertWithFallback(jsCode: string): Promise<string> {
-    // Try LLM first if available
-    if (this.llmConverter && this.llmConverter.isAvailable()) {
-      try {
-        return await this.llmConverter.convertWithLLM(jsCode)
-      } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.warn('skills', `LLM conversion failed, falling back to simple converter: ${errorMessage}`)
-      }
-    }
-
-    // Fallback to simple converter
+    // Use simple converter directly - no fallback
     return this.convert(jsCode)
   }
   

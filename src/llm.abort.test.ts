@@ -157,7 +157,7 @@ describe('LLM Abort Support', () => {
         generate: vi.fn(),
         init: vi.fn()
       }
-      hybrid = new HybridLLMEngine(mockLocal, vi.fn())
+      hybrid = new HybridLLMEngine(mockLocal)
       ;(hybrid as any).onlineEngine = mockOnline
       ;(hybrid as any).useOnline = true
     })
@@ -174,20 +174,6 @@ describe('LLM Abort Support', () => {
       })).rejects.toThrow('Generation aborted')
 
       expect(mockLocal.generate).not.toHaveBeenCalled()
-    })
-
-    it('should fallback to local if online engine fails for other reasons', async () => {
-      const controller = new AbortController()
-      mockOnline.generate.mockRejectedValue(new Error('Network error'))
-      mockLocal.generate.mockResolvedValue('local response')
-
-      const result = await hybrid.generate('test prompt', {
-        onToken: vi.fn(),
-        signal: controller.signal
-      })
-
-      expect(result).toBe('local response')
-      expect(mockLocal.generate).toHaveBeenCalled()
     })
   })
 })

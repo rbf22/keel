@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Engine Initialization</title>
+</head>
+<body>
+    <h1>Engine Initialization Debug</h1>
+    <div id="logs"></div>
+    
+    <script type="module">
+        const logs = document.getElementById('logs');
+        
+        function log(message) {
+            console.log(message);
+            const div = document.createElement('div');
+            div.textContent = `[${new Date().toISOString()}] ${message}`;
+            logs.appendChild(div);
+        }
+
+        async function testEngineInit() {
+            try {
+                log('Starting engine test...');
+                
+                // Import webllm
+                log('Importing webllm...');
+                const webllm = await import("@mlc-ai/web-llm");
+                log('webllm imported successfully');
+                
+                // Check WebGPU
+                log('Checking WebGPU...');
+                if (!navigator.gpu) {
+                    log('ERROR: WebGPU not supported');
+                    return;
+                }
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) {
+                    log('ERROR: WebGPU adapter not found');
+                    return;
+                }
+                log('WebGPU support confirmed');
+                
+                // Test engine creation with timeout
+                log('Creating engine...');
+                const ENGINE_INIT_TIMEOUT = 30000; // 30 seconds
+                
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => {
+                        log('ERROR: Engine initialization timed out');
+                        reject(new Error('Engine initialization timed out'));
+                    }, ENGINE_INIT_TIMEOUT);
+                });
+                
+                const enginePromise = webllm.CreateServiceWorkerMLCEngine(
+                    "SmolLM2-360M-Instruct-q4f16_1-MLC",
+                    {
+                        appConfig: {
+                            useIndexedDBCache: true,
+                            modelList: [
+                                {
+                                    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC",
+                                    model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
+                                    model_lib: "smollm2-360m-instruct-q4f16",
+                                    vram_required_MB: 256,
+                                    low_resource_required: false,
+                                    required_features: ["shader-f16"],
+                                }
+                            ]
+                        },
+                        initProgressCallback: (report) => {
+                            log(`Progress: ${report.text} (${report.progress}%)`);
+                        }
+                    }
+                );
+                
+                log('Waiting for engine initialization...');
+                const engine = await Promise.race([enginePromise, timeoutPromise]);
+                log('Engine initialized successfully!');
+                
+                // Clean up
+                await engine.unload();
+                log('Engine unloaded successfully');
+                
+            } catch (error) {
+                log(`ERROR: ${error.message}`);
+                console.error('Full error:', error);
+            }
+        }
+        
+        // Start test
+        testEngineInit();
+    </script>
+</body>
+</html>

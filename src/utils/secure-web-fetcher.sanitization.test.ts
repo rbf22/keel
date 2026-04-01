@@ -158,24 +158,7 @@ describe('SecureWebFetcher - HTML Sanitization', () => {
       });
     });
 
-    it('should fallback to regex when DOMParser fails', () => {
-      vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      
-      // Mock DOMParser to throw error
-      Object.defineProperty(globalThis, 'DOMParser', { 
-        value: vi.fn().mockImplementation(() => {
-          throw new Error('DOMParser failed');
-        })
-      });
-      
-      const content = '<script>alert("xss")</script><p>Safe content</p>';
-      const sanitized = SecureWebFetcher.sanitizeContent(content);
-      
-      expect(logger.warn).toHaveBeenCalledWith('secure-fetch', 'DOMParser sanitization failed, using regex fallback', expect.any(Object));
-      expect(sanitized).not.toContain('<script>');
-      expect(sanitized).toContain('<p>Safe content</p>');
-    });
-
+    
     it('should handle case variations in dangerous patterns', () => {
       const content = `
         <SCRIPT>alert("xss")</SCRIPT>

@@ -52,7 +52,7 @@ describe('LocalLLMEngine Initialization Diagnostics', () => {
     const fetchError = new Error('Failed to fetch')
     ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(fetchError)
 
-    await expect(engine.init()).rejects.toThrow(`Failed to initialize ServiceWorkerMLCEngine: Failed to fetch`)
+    await expect(engine.init()).rejects.toThrow('Failed to fetch')
     
     expect(webllm.CreateServiceWorkerMLCEngine).toHaveBeenCalledWith(
       modelId,
@@ -63,24 +63,22 @@ describe('LocalLLMEngine Initialization Diagnostics', () => {
         initProgressCallback: expect.any(Function)
       })
     )
-
-    expect(logger.error).toHaveBeenCalledWith(
-      'llm',
-      'ServiceWorkerMLCEngine initialization failed',
-      expect.objectContaining({ error: fetchError })
-    )
   })
 
   it('should report specific error message for non-fetch errors', async () => {
     const otherError = new Error('GPU out of memory')
     ;(webllm.CreateServiceWorkerMLCEngine as any).mockRejectedValue(otherError)
 
-    await expect(engine.init()).rejects.toThrow(`Failed to initialize ServiceWorkerMLCEngine: GPU out of memory`)
+    await expect(engine.init()).rejects.toThrow('GPU out of memory')
     
-    expect(logger.error).toHaveBeenCalledWith(
-      'llm',
-      'ServiceWorkerMLCEngine initialization failed',
-      expect.objectContaining({ error: otherError })
+    expect(webllm.CreateServiceWorkerMLCEngine).toHaveBeenCalledWith(
+      modelId,
+      expect.objectContaining({
+        appConfig: expect.objectContaining({
+          model_list: expect.any(Array)
+        }),
+        initProgressCallback: expect.any(Function)
+      })
     )
   })
 })

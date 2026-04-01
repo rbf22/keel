@@ -139,18 +139,7 @@ app.innerHTML = `
         </div>
         <button id="initBtn">Initialize Local LLM & Python</button>
       </div>
-      <div id="agentControls" style="display: none; flex-direction: column; gap: 0.5rem; align-items: center; background: #222; padding: 0.8rem 1.2rem; border-radius: 20px; max-width: 90%;">
-        <div style="display: flex; gap: 1rem; align-items: center;">
-          <label style="font-size: 0.8rem; color: #888;">Mode:</label>
-          <label class="switch-label"><input type="checkbox" id="multiAgentToggle" checked> Multi-Agent Agency</label>
-        </div>
-        <div id="personaSelection" style="display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; border-top: 1px solid #333; padding-top: 0.5rem;">
-          <label class="switch-label" title="Information Specialist"><input type="checkbox" class="persona-checkbox" value="researcher" checked> Researcher</label>
-          <label class="switch-label" title="Quality Controller"><input type="checkbox" class="persona-checkbox" value="reviewer" checked> Reviewer</label>
-          <label class="switch-label" title="System Monitor"><input type="checkbox" class="persona-checkbox" value="observer" checked> Observer</label>
-        </div>
-      </div>
-    </div>
+          </div>
   </div>
 `
 
@@ -163,16 +152,12 @@ const userInput = document.getElementById('userInput')! as HTMLInputElement
 const sendBtn = document.getElementById('sendBtn')! as HTMLButtonElement
 const stopBtn = document.getElementById('stopBtn')! as HTMLButtonElement
 const initBtn = document.getElementById('initBtn')! as HTMLButtonElement
-const statsEl = document.getElementById('stats')!
 const debugLogsEl = document.getElementById('logsContainer')!
 const vfsContainer = document.getElementById('vfsContainer')!
 const refreshContextBtn = document.getElementById('refreshContextBtn')! as HTMLButtonElement
 const copyLogsBtn = document.getElementById('copyLogsBtn')! as HTMLButtonElement
 const logNotificationEl = document.getElementById('logNotification')!
 const setupControls = document.getElementById('setupControls')!
-const agentControls = document.getElementById('agentControls')!
-const multiAgentToggle = document.getElementById('multiAgentToggle')! as HTMLInputElement
-const personaSelection = document.getElementById('personaSelection')!
 
 // Skills elements
 const skillsList = document.getElementById('skillsList')!
@@ -193,9 +178,6 @@ const saveSettingsBtn = document.getElementById('saveSettingsBtn')! as HTMLButto
 const storageUsage = document.getElementById('storageUsage')!
 const modelsList = document.getElementById('modelsList')!
 
-multiAgentToggle.onchange = () => {
-    personaSelection.style.display = multiAgentToggle.checked ? 'flex' : 'none';
-};
 
 // Tab switching logic
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -557,11 +539,6 @@ function addMessage(text: string, role: 'user' | 'assistant' | 'system') {
   div.textContent = text
   messagesEl.appendChild(div)
   messagesEl.scrollTop = messagesEl.scrollHeight
-  return div
-}
-
-function clearPythonOutput() {
-  pythonOutputEl.textContent = '';
 }
 
 function handlePythonOutput(output: PythonOutput, targetEl: HTMLElement = pythonOutputEl) {
@@ -731,11 +708,7 @@ initBtn.onclick = async () => {
       statusEl.textContent = msg
     });
 
-    engine = new HybridLLMEngine(localEngine, () => {
-      onlineModeToggle.checked = false;
-      localStorage.setItem('onlineModeEnabled', 'false');
-      addMessage("Online LLM failed. Falling back to local mode.", "assistant");
-    });
+    engine = new HybridLLMEngine(localEngine);
 
     // Apply current settings
     const apiKey = geminiApiKeyInput.value.trim();
@@ -761,7 +734,6 @@ initBtn.onclick = async () => {
     }
     
     logger.info('system', 'Core systems ready, initializing skills...');
-    await SkillsDownloader.setLLMEngine(engine);
 
     // Initialize skills engine
     await skillsEngine.init();
@@ -777,7 +749,7 @@ initBtn.onclick = async () => {
     userInput.disabled = false
     sendBtn.disabled = false
     setupControls.style.display = 'none'
-    agentControls.style.display = 'flex'
+    // Agent controls are now integrated into the main UI
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     logger.error('system', `Initialization failed: ${errorMessage}`, { error: err });
@@ -808,7 +780,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
     taskId, 
     inputLength: text.length, 
     isOverride: !!overrideText,
-    multiAgentMode: multiAgentToggle.checked 
+    // Always using skill-based orchestration 
   });
 
   userInput.disabled = true;
@@ -825,16 +797,13 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
 
   setTaskRunning(true);
 
-  if (multiAgentToggle.checked) {
-    logger.info('main', 'Starting multi-agent task execution', { 
-      taskId, 
-      activePersonaIds: ["researcher", "coder", "reviewer", "observer"] 
-    });
-    const orchestrator = new AgentOrchestrator(engine, python);
-    const agentDivs: Record<string, HTMLDivElement> = {};
+  // Always use skill-based orchestration
+  logger.info('main', 'Starting skill-based task execution', { taskId });
+  const orchestrator = new AgentOrchestrator(engine, python);
+  const agentDivs: Record<string, HTMLDivElement> = {};
 
-    try {
-      await orchestrator.runTask(text, (update: AgentResponse) => {
+  try {
+    await orchestrator.runTask(text, (update: AgentResponse) => {
         if (taskId !== currentTaskId || signal.aborted) return;
         
         // Log all agent updates to main category for complete debugging visibility
@@ -890,268 +859,6 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
 
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
-    } catch (err: unknown) {
-      if (taskId !== currentTaskId) return;
-      if (signal.aborted) {
-        logger.info('main', 'Task execution aborted');
-        return;
-      }
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error('main', 'Orchestrator task execution failed', { 
-        taskId, 
-        error: errorMessage, 
-        errorType: err instanceof Error ? err.constructor.name : 'Unknown'
-      });
-      addMessage(`Orchestrator Error: ${errorMessage}`, 'assistant');
-    } finally {
-      if (taskId === currentTaskId) {
-        logger.info('main', 'Multi-agent task completed', { taskId });
-        setTaskRunning(false);
-      }
-    }
-    return;
-  }
-
-  logger.info('main', 'Starting single-agent task execution', { taskId });
-  const assistantDiv = addMessage('...', 'assistant')
-  const artifactContainer = document.createElement('div');
-  artifactContainer.className = 'artifact-container';
-  assistantDiv.after(artifactContainer);
-
-  try {
-    let fullText = "";
-    
-    // Add skills context to system prompt
-    const skillsContext = skillsEngine.getSkillsDescription();
-    const systemPrompt = `You are Keel, a local-first AI agent with access to Python execution and skills.\n\nAvailable Skills:\n${skillsContext}\n\nWhen you need to use a skill, format it as: <skill name="skillName">{"param": "value"}</skill>\n\nWhen you need to perform calculations or data analysis, write Python code in triple-backtick blocks.`;
-    
-    await engine.generate(text, {
-      onToken: (updatedText) => {
-        if (taskId !== currentTaskId || signal.aborted) return;
-        fullText = updatedText;
-        assistantDiv.textContent = fullText
-        messagesEl.scrollTop = messagesEl.scrollHeight
-      },
-      history: chatHistory.slice(0, -1),
-      systemOverride: systemPrompt,
-      signal
-    });
-
-    if (taskId !== currentTaskId || signal.aborted) return;
-
-    logger.info('main', 'Single-agent LLM generation completed', { 
-      taskId, 
-      responseLength: fullText.length 
-    });
-    chatHistory.push({ role: 'assistant', content: fullText });
-    
-    // Parse and execute skill calls
-    const skillCalls = skillsEngine.parseSkillCalls(fullText);
-    logger.info('main', 'Parsed skill calls from response', { 
-      taskId, 
-      skillCount: skillCalls.length,
-      skillNames: skillCalls.map(call => call.name)
-    });
-    if (skillCalls.length > 0 && python) {
-      logger.info('main', 'Starting skill execution', { taskId, skillCount: skillCalls.length });
-      if (taskId !== currentTaskId || signal.aborted) return;
-      clearPythonOutput();
-      
-      const dualPythonHandler = (output: PythonOutput) => {
-        if (taskId !== currentTaskId || signal.aborted) return;
-        handlePythonOutput(output, artifactContainer); // Chat
-        handlePythonOutput(output, pythonOutputEl);    // Python Tab
-      };
-      
-      // Push the dual handler onto the stack
-      python.onOutput = dualPythonHandler;
-      
-      try {
-        for (const skillCall of skillCalls) {
-          if (taskId !== currentTaskId || signal.aborted) break;
-          logger.info('main', 'Executing skill', { 
-            taskId, 
-            skillName: skillCall.name, 
-            skillParams: skillCall.params 
-          });
-          try {
-            pythonStatusEl.textContent = 'Running skill...';
-            const result = await skillsEngine.executeSkill(
-              skillCall.name, 
-              skillCall.params, 
-              { pythonRuntime: python }
-            );
-            
-            if (taskId !== currentTaskId || signal.aborted) break;
-
-            if (result.success) {
-              logger.info('main', 'Skill execution succeeded', { 
-                taskId, 
-                skillName: skillCall.name, 
-                hasOutput: !!result.output 
-              });
-              const resultDiv = document.createElement('div');
-              resultDiv.className = 'output-log';
-              resultDiv.textContent = `Skill ${skillCall.name} result: ${result.output || 'Success'}`;
-              artifactContainer.appendChild(resultDiv);
-            } else {
-              logger.error('main', 'Skill execution failed', { 
-                taskId, 
-                skillName: skillCall.name, 
-                error: result.error 
-              });
-              const errorDiv = document.createElement('div');
-              errorDiv.className = 'output-error';
-              errorDiv.textContent = `Skill ${skillCall.name} error: ${result.error}`;
-              artifactContainer.appendChild(errorDiv);
-            }
-          } catch (error: unknown) {
-            if (taskId !== currentTaskId || signal.aborted) break;
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('main', 'Skill execution threw error', { 
-              taskId, 
-              skillName: skillCall.name, 
-              error: errorMessage 
-            });
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'output-error';
-            errorDiv.textContent = `Skill execution error: ${errorMessage}`;
-            artifactContainer.appendChild(errorDiv);
-          }
-        }
-      } finally {
-        logger.info('main', 'Skill execution completed', { taskId });
-        // Restore the previous handler
-        python.restoreHandler();
-        pythonStatusEl.textContent = 'Ready';
-      }
-    }
-
-    if (taskId !== currentTaskId || signal.aborted) return;
-
-    // Extract python code blocks
-    const pythonRegex = /```python\n([\s\S]*?)```/g;
-    let match;
-    const codeBlocks: string[] = [];
-    while ((match = pythonRegex.exec(fullText)) !== null) {
-      codeBlocks.push(match[1]);
-    }
-
-    logger.info('main', 'Parsed Python code blocks', { 
-      taskId, 
-      codeBlockCount: codeBlocks.length,
-      totalCodeLength: codeBlocks.reduce((sum, code) => sum + code.length, 0)
-    });
-
-    if (codeBlocks.length > 0) {
-      logger.info('main', 'Starting Python code execution', { 
-        taskId, 
-        codeBlockCount: codeBlocks.length 
-      });
-      if (taskId !== currentTaskId || signal.aborted) return;
-      clearPythonOutput();
-      
-      const dualPythonHandler = (output: PythonOutput) => {
-        if (taskId !== currentTaskId || signal.aborted) return;
-        handlePythonOutput(output, artifactContainer); // Chat
-        handlePythonOutput(output, pythonOutputEl);    // Python Tab
-      };
-
-      // Push the dual handler onto the stack
-      python.onOutput = dualPythonHandler;
-
-      try {
-        for (const code of codeBlocks) {
-          if (taskId !== currentTaskId || signal.aborted) break;
-          logger.info('main', 'Executing Python code block', { 
-            taskId, 
-            codeLength: code.length,
-            codePreview: code.substring(0, 100) + (code.length > 100 ? '...' : '')
-          });
-          pythonStatusEl.textContent = 'Running...';
-          try {
-            await python.execute(code);
-            logger.info('main', 'Python code block executed successfully', { taskId });
-            if (taskId !== currentTaskId || signal.aborted) break;
-            pythonStatusEl.textContent = 'Ready';
-          } catch (err: unknown) {
-            if (taskId !== currentTaskId || signal.aborted) break;
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            logger.error('main', 'Python code execution failed', { 
-              taskId, 
-              error: errorMessage,
-              codeLength: code.length
-            });
-            pythonStatusEl.textContent = 'Error';
-            // Errors are already handled via handlePythonOutput (inline)
-
-            // Automatic error recovery with proper async error handling
-            const logs = logger.getLogs().slice(-10); // Last 10 logs for context
-            const logContext = logs.map(l => `[${l.category}] ${l.message}`).join('\n');
-            const recoveryPrompt = `The previous Python code failed with the following error:
-\`\`\`
-${errorMessage}
-\`\`\`
-
-Recent system logs:
-\`\`\`
-${sanitizeHTML(logContext)}
-\`\`\`
-
-Please analyze the error and provide a corrected version of the code.`;
-
-            logger.info('main', 'Starting error recovery process', { 
-              taskId, 
-              retryCount: retryCount + 1,
-              errorMessage 
-            });
-            addMessage(recoveryPrompt, 'user');
-            
-            // Restore handler before attempting recovery
-            python.restoreHandler();
-            
-            // Use queueMicrotask for safer async scheduling with error boundaries
-            queueMicrotask(async () => {
-              try {
-                if (taskId !== currentTaskId || signal.aborted) return;
-                logger.info('main', 'Attempting error recovery', { 
-                  taskId, 
-                  retryCount: retryCount + 1 
-                });
-                await handleSend(recoveryPrompt, retryCount + 1);
-              } catch (recoveryError: unknown) {
-                if (taskId !== currentTaskId || signal.aborted) return;
-                const recoveryErrorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
-                logger.error('main', 'Error recovery failed', { 
-                  taskId, 
-                  error: recoveryErrorMessage,
-                  retryCount: retryCount + 1
-                });
-                addMessage(`Recovery failed: ${recoveryErrorMessage}`, 'assistant');
-                // Ensure controls are re-enabled on recovery failure
-                userInput.disabled = false;
-                sendBtn.disabled = false;
-                userInput.focus();
-              }
-            });
-            
-            return; // Exit current handleSend, recovery will handle the rest
-          }
-        }
-      } finally {
-        logger.info('main', 'Python code execution completed', { taskId });
-        // Restore the previous handler if not already restored during error recovery
-        if (python.handlerCount > 0) {
-          python.restoreHandler();
-        }
-      }
-    }
-
-    const stats = await engine.getStats()
-    if (taskId === currentTaskId && stats) {
-      logger.info('main', 'Engine stats retrieved', { taskId, stats });
-      statsEl.textContent = stats
-    }
   } catch (err: unknown) {
     if (taskId !== currentTaskId) return;
     if (signal.aborted) {
@@ -1159,30 +866,21 @@ Please analyze the error and provide a corrected version of the code.`;
       return;
     }
     const errorMessage = err instanceof Error ? err.message : String(err);
-    logger.error('main', 'Single-agent task execution failed', { 
+    logger.error('main', 'Orchestrator task execution failed', { 
       taskId, 
-      error: errorMessage,
+      error: errorMessage, 
       errorType: err instanceof Error ? err.constructor.name : 'Unknown'
     });
-    assistantDiv.textContent = `Error: ${errorMessage}`
+    addMessage(`Orchestrator Error: ${errorMessage}`, 'assistant');
   } finally {
-    if (taskId === currentTaskId && retryCount === 0) {
-      logger.info('main', 'Single-agent task completed', { taskId });
+    if (taskId === currentTaskId) {
+      logger.info('main', 'Skill-based task completed', { taskId });
       setTaskRunning(false);
-      userInput.focus();
     }
   }
 }
 
-function sanitizeHTML(content: string): string {
-  // Use HTML entity encoding to prevent XSS - escape all HTML special characters
-  return content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
-}
+  
 
 sendBtn.onclick = () => handleSend()
 userInput.onkeypress = (e) => {

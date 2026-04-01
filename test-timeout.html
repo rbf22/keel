@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timeout Test</title>
+</head>
+<body>
+    <h1>Engine Timeout Test</h1>
+    <div id="logs"></div>
+    
+    <script type="module">
+        const logs = document.getElementById('logs');
+        
+        function log(message) {
+            console.log(message);
+            const div = document.createElement('div');
+            div.textContent = `[${new Date().toISOString()}] ${message}`;
+            logs.appendChild(div);
+        }
+
+        async function testTimeout() {
+            try {
+                log('Testing new timeout implementation...');
+                
+                // Import the updated llm module
+                const { LocalLLMEngine } = await import('/src/llm.ts?t=20260401');
+                
+                log('Creating LocalLLMEngine...');
+                const engine = new LocalLLMEngine("SmolLM2-360M-Instruct-q4f16_1-MLC", (msg) => {
+                    log(`Status: ${msg}`);
+                });
+                
+                log('Starting engine initialization...');
+                const startTime = Date.now();
+                
+                await engine.init();
+                
+                const endTime = Date.now();
+                log(`SUCCESS: Engine initialized in ${endTime - startTime}ms`);
+                
+                // Clean up
+                await engine.unload();
+                log('Engine unloaded successfully');
+                
+            } catch (error) {
+                log(`ERROR: ${error.message}`);
+                console.error('Full error:', error);
+            }
+        }
+        
+        // Start test
+        testTimeout();
+    </script>
+</body>
+</html>

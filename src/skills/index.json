@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "description": "Keel Skills Index - Automatically generated list of available skills",
+  "generated": "2026-04-01T01:27:41Z",
+  "skills": [
+    "data-analysis",
+    "execution-analyzer",
+    "python-coding",
+    "quality-review",
+    "research",
+    "task-planning"
+  ]
+}

@@ -167,7 +167,6 @@ describe('LLM Simple Coverage Tests', () => {
   describe('HybridLLMEngine', () => {
     let hybridEngine: HybridLLMEngine;
     let mockLocalEngine: any;
-    let onFallback: any;
 
     beforeEach(() => {
       mockLocalEngine = {
@@ -176,8 +175,7 @@ describe('LLM Simple Coverage Tests', () => {
         getStats: vi.fn(),
         unload: vi.fn()
       };
-      onFallback = vi.fn();
-      hybridEngine = new HybridLLMEngine(mockLocalEngine, onFallback);
+      hybridEngine = new HybridLLMEngine(mockLocalEngine);
     });
 
     it('should initialize local engine', async () => {

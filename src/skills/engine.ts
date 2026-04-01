@@ -237,6 +237,40 @@ print(result)
 \`\`\``
     this.registerSkill(SkillsParser.parse(analyzeDataContent))
   }
+
+  // Load skills from filesystem (for development)
+  async loadSkillsFromFilesystem(): Promise<void> {
+    // Discover all skill directories by fetching the skills index
+    const response = await fetch('/keel/src/skills/index.json')
+    if (!response.ok) {
+      throw new Error(`Failed to load skills index: ${response.status}`)
+    }
+    
+    const skillIndex = await response.json()
+    logger.info('skills', 'Loading skills from index', { 
+      skillCount: skillIndex.skills.length 
+    })
+    
+    for (const skillPath of skillIndex.skills) {
+      try {
+        const skillResponse = await fetch(`/keel/src/skills/${skillPath}/SKILL.md`)
+        if (!skillResponse.ok) {
+          logger.warn('skills', `Failed to load skill ${skillPath}`, { 
+            status: skillResponse.status 
+          })
+          continue
+        }
+        
+        const content = await skillResponse.text()
+        const skill = SkillsParser.parse(content)
+        this.registerSkill(skill)
+        
+        logger.info('skills', `Loaded skill from filesystem: ${skill.name}`)
+      } catch (error) {
+        logger.error('skills', `Failed to load skill ${skillPath} from filesystem`, { error })
+      }
+    }
+  }
   
   // Register a skill
   registerSkill(skill: ParsedSkill): void {
