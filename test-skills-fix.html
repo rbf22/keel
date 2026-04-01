@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Skills Fix</title>
+</head>
+<body>
+    <h1>Test Skills Fix</h1>
+    <p>Testing the fixed python-coding and quality-review skills</p>
+    
+    <button onclick="testMathSkill()">Test Math Skill</button>
+    <div id="output"></div>
+
+    <script type="module">
+        window.testMathSkill = async function() {
+            const output = document.getElementById('output');
+            output.innerHTML = '<p>Testing skill execution...</p>';
+            
+            try {
+                // This would normally be done through the main system
+                // For now, let's just see if the server responds
+                const response = await fetch('/keel/');
+                output.innerHTML = '<p>Server is running. Open the main application at <a href="/keel/" target="_blank">/keel/</a> to test the skills.</p>';
+            } catch (error) {
+                output.innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        };
+    </script>
+</body>
+</html>

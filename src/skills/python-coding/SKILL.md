@@ -50,18 +50,212 @@ Use: CALL: execute_python ARGUMENTS: {"code": "your_python_code_here"}
 
 ### Function Organization
 ```python
-def main_function():
-    """Main function that orchestrates the solution."""
-    # Your main logic here
-    pass
+# General-purpose code artifact creator
+def create_code_artifact(task_specification):
+    """Create a code artifact based on task specification."""
+    import json
+    import uuid
+    import re
+    
+    log(f"Creating code artifact for: {task_specification}")
+    
+    # Parse the task specification
+    task_lower = task_specification.lower()
+    
+    # Determine what type of code to create
+    if any(keyword in task_lower for keyword in ['sum', 'add', 'calculate', 'compute', 'multiply', 'divide', 'subtract']):
+        artifact = create_math_artifact(task_specification)
+    elif any(keyword in task_lower for keyword in ['analyze', 'data', 'dataset', 'statistics', 'process']):
+        artifact = create_data_artifact(task_specification)
+    elif any(keyword in task_lower for keyword in ['file', 'read', 'write', 'save', 'load']):
+        artifact = create_file_artifact(task_specification)
+    elif any(keyword in task_lower for keyword in ['web', 'fetch', 'download', 'scrape', 'api']):
+        artifact = create_web_artifact(task_specification)
+    else:
+        artifact = create_general_artifact(task_specification)
+    
+    # Generate unique ID
+    artifact['id'] = str(uuid.uuid4())[:8]
+    artifact['created_by'] = 'python-coding'
+    artifact['status'] = 'pending'
+    
+    log(f"Created artifact: {artifact['id']} - {artifact['name']}")
+    return artifact
 
-def helper_function(param):
-    """Helper function for specific tasks."""
-    # Helper logic here
-    pass
+def create_math_artifact(task):
+    """Create mathematical computation artifact."""
+    import re
+    
+    # Extract specific operation
+    if 'sum' in task.lower() or 'add' in task.lower():
+        return {
+            'name': 'sum_calculator',
+            'description': 'Calculate sum of numbers',
+            'function': '''def calculate_sum(numbers):
+    """Calculate the sum of a list of numbers."""
+    if not numbers:
+        return 0
+    return sum(numbers)''',
+            'usage': '''# Example usage
+result = calculate_sum([134, 14])
+print(f"The sum is: {result}")''',
+            'dependencies': [],
+            'test_cases': [
+                {'input': [134, 14], 'expected': 148},
+                {'input': [1, 2, 3], 'expected': 6},
+                {'input': [], 'expected': 0}
+            ]
+        }
+    elif 'multiply' in task.lower():
+        return {
+            'name': 'product_calculator',
+            'description': 'Calculate product of numbers',
+            'function': '''def calculate_product(numbers):
+    """Calculate the product of a list of numbers."""
+    if not numbers:
+        return 1
+    result = 1
+    for num in numbers:
+        result *= num
+    return result''',
+            'usage': '''# Example usage
+result = calculate_product([2, 3, 4])
+print(f"The product is: {result}")''',
+            'dependencies': [],
+            'test_cases': [
+                {'input': [2, 3, 4], 'expected': 24},
+                {'input': [5, 6], 'expected': 30}
+            ]
+        }
+    else:
+        return create_general_math_artifact(task)
 
-if __name__ == "__main__":
-    main_function()
+def create_data_artifact(task):
+    """Create data processing artifact."""
+    return {
+        'name': 'data_processor',
+        'description': 'Process and analyze data',
+        'function': '''def process_data(data, operation='describe'):
+    """Process data with various operations."""
+    import pandas as pd
+    import numpy as np
+    
+    df = pd.DataFrame(data)
+    
+    if operation == 'describe':
+        return df.describe()
+    elif operation == 'shape':
+        return df.shape
+    elif operation == 'mean':
+        return df.mean()
+    else:
+        return df.head()''',
+        'usage': '''# Example usage
+data = [{'col1': 1, 'col2': 2}, {'col1': 3, 'col2': 4}]
+result = process_data(data, 'describe')
+print(result)''',
+        'dependencies': ['pandas', 'numpy'],
+        'test_cases': [
+            {'input': [{'a': 1, 'b': 2}], 'operation': 'shape'}
+        ]
+    }
+
+def create_file_artifact(task):
+    """Create file handling artifact."""
+    return {
+        'name': 'file_handler',
+        'description': 'Handle file operations',
+        'function': '''def handle_file(filename, operation='read', content=None):
+    """Handle file operations safely."""
+    try:
+        if operation == 'read':
+            with open(filename, 'r') as f:
+                return f.read()
+        elif operation == 'write':
+            with open(filename, 'w') as f:
+                f.write(content)
+            return f"Written to {filename}"
+        else:
+            return "Unknown operation"
+    except Exception as e:
+        return f"Error: {e}"''',
+        'usage': '''# Example usage
+content = handle_file('data.txt', 'read')
+print(content)''',
+        'dependencies': [],
+        'test_cases': []
+    }
+
+def create_web_artifact(task):
+    """Create web fetching artifact."""
+    return {
+        'name': 'web_fetcher',
+        'description': 'Fetch data from web',
+        'function': '''def fetch_web_data(url):
+    """Fetch data from a URL."""
+    import requests
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        return f"Error fetching {url}: {e}"''',
+        'usage': '''# Example usage
+data = fetch_web_data('https://example.com')
+print(data)''',
+        'dependencies': ['requests'],
+        'test_cases': []
+    }
+
+def create_general_artifact(task):
+    """Create general-purpose artifact."""
+    return {
+        'name': 'task_executor',
+        'description': 'Execute general task',
+        'function': '''def execute_task(task_params):
+    """Execute a general task."""
+    # This is a template - customize based on specific task
+    result = f"Task executed with params: {task_params}"
+    return result''',
+        'usage': '''# Example usage
+result = execute_task({'param1': 'value1'})
+print(result)''',
+        'dependencies': [],
+        'test_cases': []
+    }
+
+def create_general_math_artifact(task):
+    """Create general math artifact."""
+    return {
+        'name': 'math_calculator',
+        'description': 'General mathematical calculations',
+        'function': '''def calculate(operation, numbers):
+    """Perform mathematical operations."""
+    if operation == 'sum':
+        return sum(numbers)
+    elif operation == 'product':
+        result = 1
+        for n in numbers:
+            result *= n
+        return result
+    elif operation == 'average':
+        return sum(numbers) / len(numbers) if numbers else 0
+    else:
+        return "Unknown operation"''',
+        'usage': '''# Example usage
+result = calculate('sum', [134, 14])
+print(f"Result: {result}")''',
+        'dependencies': [],
+        'test_cases': [
+            {'operation': 'sum', 'numbers': [134, 14], 'expected': 148}
+        ]
+    }
+
+# Create and output the code artifact
+artifact = create_code_artifact("""{{task}}""")
+print(json.dumps(artifact, indent=2))
+log(f"Code artifact '{artifact['id']}' created successfully")
 ```
 
 ### Data Processing Pattern

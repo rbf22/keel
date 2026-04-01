@@ -101,6 +101,24 @@ export class KeelStorage {
     });
   }
 
+  async deleteFile(path: string): Promise<boolean> {
+    if (!this.db) throw new Error("Storage not initialized");
+    const fullPath = this.normalizePath(path);
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["vfs"], "readwrite");
+      const store = transaction.objectStore("vfs");
+      const request = store.delete(fullPath);
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => {
+        if (request.error?.name === 'NotFoundError') {
+          resolve(false); // File didn't exist
+        } else {
+          reject(request.error);
+        }
+      };
+    });
+  }
+
   async listFiles(prefix = "keel://"): Promise<string[]> {
     if (!this.db) throw new Error("Storage not initialized");
     const fullPrefix = this.normalizePath(prefix);

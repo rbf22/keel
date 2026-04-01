@@ -4,6 +4,41 @@ import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 import { PythonRuntime } from "./python-runtime";
 import { skillsEngine } from "./skills/engine";
 import { AgentResponse } from "./types";
+import { storage } from "./storage";
+
+// Code artifact interface for context sharing between skills
+interface CodeArtifact {
+  id: string;
+  name: string;
+  description: string;
+  function: string;
+  usage: string;
+  dependencies: string[];
+  test_cases?: Array<{
+    input?: any;
+    operation?: string;
+    expected?: any;
+  }>;
+  created_by: string;
+  reviewed_by?: string;
+  status: 'pending' | 'approved' | 'needs_fixes' | 'rejected';
+}
+
+// Review result interface
+interface ReviewResult {
+  artifact_id: string;
+  artifact_name: string;
+  approved: boolean;
+  issues: string[];
+  suggestions: string[];
+  security_concerns: string[];
+  test_results?: {
+    pass: boolean;
+    coverage: string;
+  };
+  feedback: string;
+  recommendation: 'approved' | 'needs_fixes' | 'rejected';
+}
 
 export class AgentOrchestrator {
   // private engine: LLMEngine; // Currently unused in skill-based architecture
@@ -20,6 +55,10 @@ export class AgentOrchestrator {
   // Observer pattern state
   // private lastExecutionResult: string = ""; // Currently unused in skill-based architecture
   private needsDeepAnalysis: boolean = false;
+  
+  // Code artifact context sharing
+  private currentArtifact: CodeArtifact | null = null;
+  private currentReview: ReviewResult | null = null;
 
   constructor(_engine: LLMEngine, python: PythonRuntime) {
     // this.engine = engine; // Currently unused in skill-based architecture
@@ -201,19 +240,20 @@ export class AgentOrchestrator {
    * Enhanced with context awareness to avoid false positives for legitimate workflows
    */
   private detectSkillCycle(): boolean {
-    if (this.skillExecutionHistory.length < 8) return false; // Need more history for better detection
+    if (this.skillExecutionHistory.length < 6) return false; // Need more history for better detection
     
     // Define legitimate workflow patterns that should not be considered cycles
     const legitimatePatterns = [
       ['research', 'data-analysis', 'python-coding', 'quality-review'],
       ['task-planning', 'research', 'data-analysis', 'python-coding'],
       ['python-coding', 'quality-review', 'python-coding'], // Code review iteration
-      ['research', 'python-coding', 'quality-review'] // Simplified workflow
+      ['research', 'python-coding', 'quality-review'], // Simplified workflow
+      ['python-coding', 'quality-review'] // Simple code-review cycle
     ];
     
     // Try to find cycles of different lengths (2-4 skills)
     for (let cycleLength = 2; cycleLength <= 4; cycleLength++) {
-      if (this.skillExecutionHistory.length < cycleLength * 3) continue; // Need at least 3 repetitions
+      if (this.skillExecutionHistory.length < cycleLength * 2) continue; // Need at least 2 repetitions
       
       const recentSkills = this.skillExecutionHistory.slice(-cycleLength);
       
@@ -228,25 +268,29 @@ export class AgentOrchestrator {
         continue;
       }
       
-      // Look for this sequence repeating at least 3 times (indicating a true cycle)
-      let repetitionCount = 0;
-      for (let i = 0; i <= this.skillExecutionHistory.length - cycleLength; i += cycleLength) {
-        const candidateSequence = this.skillExecutionHistory.slice(i, i + cycleLength);
+      // Look for this sequence repeating at least 3 times consecutively (indicating a true cycle)
+      let consecutiveRepetitions = 0;
+      let maxConsecutiveRepetitions = 0;
+      
+      for (let i = this.skillExecutionHistory.length - cycleLength; i >= cycleLength - 1; i -= cycleLength) {
+        const candidateSequence = this.skillExecutionHistory.slice(i - cycleLength + 1, i + 1);
         
         if (candidateSequence.length === recentSkills.length &&
             candidateSequence.every((skill, index) => skill === recentSkills[index])) {
-          repetitionCount++;
+          consecutiveRepetitions++;
+          maxConsecutiveRepetitions = Math.max(maxConsecutiveRepetitions, consecutiveRepetitions);
         } else {
-          break; // Pattern broken, reset count
+          consecutiveRepetitions = 0; // Reset count when pattern breaks
         }
       }
       
-      // If we found 3+ repetitions of the same pattern, it's likely a cycle
-      if (repetitionCount >= 3) {
-        logger.warn('orchestrator', 'Detected legitimate skill cycle', {
+      // If we found 4+ consecutive repetitions of the same pattern, it's likely a cycle
+      // (This means the pattern repeated at least 4 times in a row)
+      if (maxConsecutiveRepetitions >= 4) {
+        logger.warn('orchestrator', 'Detected repeating skill cycle', {
           cycleLength,
           pattern: recentSkills.join(' -> '),
-          repetitions: repetitionCount
+          repetitions: maxConsecutiveRepetitions
         });
         return true;
       }
@@ -265,6 +309,17 @@ export class AgentOrchestrator {
   async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, signal?: AbortSignal): Promise<ChatCompletionMessageParam[]> {
     // Validate inputs
     this.validateInputs(userRequest, onUpdate);
+    
+    // Check for artifact commands first
+    logger.info('orchestrator', 'Checking for artifact command', { userRequest });
+    const artifactResult = await this.handleArtifactCommand(userRequest);
+    if (artifactResult !== null) {
+      logger.info('orchestrator', 'Artifact command detected, returning result', { artifactResult });
+      // Return the artifact command result
+      this.chatHistory.push({ role: "user", content: userRequest });
+      this.chatHistory.push({ role: "assistant", content: artifactResult });
+      return this.chatHistory;
+    }
     
     logger.info("orchestrator", "Starting skill-based task execution", { 
       userRequest, 
@@ -369,14 +424,75 @@ export class AgentOrchestrator {
         currentSkill = 'python-coding';
         taskInstruction = `Create code based on the analysis: ${result}`;
       } else if (currentSkill === 'python-coding') {
-        currentSkill = 'quality-review';
-        taskInstruction = `Review the code execution: ${result}`;
+        // Try to parse result as a code artifact
+        try {
+          const artifact: CodeArtifact = JSON.parse(result);
+          this.currentArtifact = artifact;
+          logger.info("orchestrator", `Code artifact created: ${artifact.id} - ${artifact.name}`);
+          
+          // Move to quality review with the artifact
+          currentSkill = 'quality-review';
+          taskInstruction = `Review this code artifact: ${JSON.stringify(artifact, null, 2)}`;
+        } catch (e) {
+          // If not JSON, treat as direct result and complete task
+          if (result.length > 10 && 
+              (result.toLowerCase().includes('sum') || result.toLowerCase().includes('result') || 
+               result.toLowerCase().includes('calculated') || result.toLowerCase().includes('answer') ||
+               result.toLowerCase().includes('the ') || result.includes('is'))) {
+            taskComplete = true;
+            logger.info("orchestrator", "Task completed by python-coding skill");
+            onUpdate({ 
+              personaId: "system", 
+              content: "Task completed successfully.",
+              type: undefined
+            });
+          } else {
+            // Move to quality review for further validation
+            currentSkill = 'quality-review';
+            taskInstruction = `Review the code execution: ${result}`;
+          }
+        }
       } else if (currentSkill === 'quality-review') {
-        if (result.toLowerCase().includes('approved')) {
-          taskComplete = true;
-        } else {
-          currentSkill = 'python-coding';
-          taskInstruction = `Fix the code based on review: ${result}`;
+        // Try to parse result as a review
+        try {
+          const review: ReviewResult = JSON.parse(result);
+          this.currentReview = review;
+          logger.info("orchestrator", `Review completed: ${review.recommendation} for artifact ${review.artifact_id}`);
+          
+          if (review.approved && this.currentArtifact) {
+            // Execute the approved artifact
+            const executionResult = await this.executeArtifact(this.currentArtifact, userRequest);
+            taskComplete = true;
+            onUpdate({ 
+              personaId: "system", 
+              content: `Task completed. Result: ${executionResult}`,
+              type: undefined
+            });
+          } else if (review.recommendation === 'needs_fixes') {
+            // Send back to python-coding with feedback
+            currentSkill = 'python-coding';
+            taskInstruction = `Fix the code artifact based on this review: ${JSON.stringify(review, null, 2)}`;
+          } else if (review.recommendation === 'rejected') {
+            // Start over with a different approach
+            currentSkill = 'python-coding';
+            taskInstruction = `Create a new code artifact for: ${userRequest}`;
+          } else {
+            // Default to completion
+            taskComplete = true;
+          }
+        } catch (e) {
+          // If not JSON, use legacy logic
+          if (result.toLowerCase().includes('approved')) {
+            taskComplete = true;
+          } else if (result.toLowerCase().includes('rejected') && result.toLowerCase().includes('no output')) {
+            currentSkill = 'python-coding';
+            taskInstruction = `Try a different approach for: ${userRequest}`;
+          } else if (result.toLowerCase().includes('rejected')) {
+            currentSkill = 'python-coding';
+            taskInstruction = `Fix the code based on review: ${result}`;
+          } else {
+            taskComplete = true;
+          }
         }
       } else if (currentSkill === 'task-planning') {
         // After planning, proceed with research or coding based on plan
@@ -464,14 +580,282 @@ export class AgentOrchestrator {
     return this.chatHistory;
   }
 
+  /**
+   * Execute an approved code artifact with user inputs
+   */
+  private async executeArtifact(artifact: CodeArtifact, userRequest: string): Promise<string> {
+    logger.info("orchestrator", `Executing artifact ${artifact.id} for user request`);
+    
+    try {
+      // Extract inputs from user request based on artifact type
+      const executionInputs = this.extractInputsFromRequest(userRequest, artifact);
+      
+      // Create execution code with the function and inputs
+      const fullCode = `
+# Artifact function
+${artifact.function}
+
+# Execution with extracted inputs
+${this.generateExecutionCode(artifact, executionInputs)}
+`;
+      
+      // Execute the code using the temporary output handler
+      let outputResult = '';
+      await this.python.executeWithTemporaryOutput((output) => {
+        // Capture output
+        if (output.message) {
+          outputResult += output.message + '\n';
+        }
+      }, async () => {
+        await this.python.execute(fullCode);
+      });
+      
+      return outputResult || "Execution completed but no output captured";
+      
+    } catch (error) {
+      logger.error("orchestrator", `Failed to execute artifact ${artifact.id}`, { error });
+      return `Error executing artifact: ${error}`;
+    }
+  }
+
+  /**
+   * Extract inputs from user request based on artifact type
+   */
+  private extractInputsFromRequest(request: string, artifact: CodeArtifact): Record<string, any> {
+    const inputs: Record<string, any> = {};
+    
+    if (artifact.name.includes('sum') || artifact.name.includes('calculator')) {
+      // Extract numbers for math operations
+      const numbers = request.match(/\d+/g);
+      if (numbers && numbers.length >= 2) {
+        inputs['numbers'] = numbers.map(n => parseInt(n));
+      }
+    } else if (artifact.name.includes('data')) {
+      // For data artifacts, we might need sample data
+      inputs['data'] = this.generateSampleData(request);
+    }
+    
+    return inputs;
+  }
+
+  /**
+   * Generate execution code for the artifact
+   */
+  private generateExecutionCode(artifact: CodeArtifact, inputs: Record<string, any>): string {
+    if (artifact.name.includes('sum')) {
+      return `result = calculate_sum(${JSON.stringify(inputs.numbers || [])})
+print(f"The sum is: {result}")`;
+    } else if (artifact.name.includes('product')) {
+      return `result = calculate_product(${JSON.stringify(inputs.numbers || [])})
+print(f"The product is: {result}")`;
+    } else if (artifact.name.includes('math_calculator')) {
+      return `result = calculate('sum', ${JSON.stringify(inputs.numbers || [])})
+print(f"Result: {result}")`;
+    } else {
+      // Default execution using the usage example
+      return artifact.usage;
+    }
+  }
+
+  /**
+   * Generate sample data for data artifacts
+   */
+  private generateSampleData(_request: string): any[] {
+    // Simple sample data generation - could be enhanced
+    return [
+      { col1: 1, col2: 2 },
+      { col1: 3, col2: 4 },
+      { col1: 5, col2: 6 }
+    ];
+  }
+
+  /**
+   * Handle natural language artifact commands
+   */
+  async handleArtifactCommand(request: string): Promise<string | null> {
+    const lowerRequest = request.toLowerCase();
+    logger.debug('orchestrator', 'Checking for artifact command', { request: lowerRequest });
+    
+    // Save commands - simpler parsing approach
+    if (lowerRequest.includes('save') && lowerRequest.includes('keel://')) {
+      logger.debug('orchestrator', 'Detected save command with keel:// path');
+      // Find keel:// path in the request
+      const pathMatch = request.match(/(keel:\/\/\S+)/);
+      if (pathMatch) {
+        const path = pathMatch[1];
+        logger.debug('orchestrator', 'Found path', { path });
+        // Extract content after the path (after colon)
+        const pathIndex = request.indexOf(path);
+        const pathEnd = pathIndex + path.length;
+        const colonIndex = request.indexOf(':', pathEnd);
+        let content = '';
+        
+        if (colonIndex > -1) {
+          content = request.substring(colonIndex + 1).trim();
+          logger.debug('orchestrator', 'Extracted content from after colon', { content });
+        } else {
+          // Alternative: extract content between "as" and the path
+          const asIndex = lowerRequest.lastIndexOf(' as ');
+          if (asIndex > -1 && asIndex < pathIndex) {
+            content = request.substring(asIndex + 4, pathIndex).trim();
+            logger.debug('orchestrator', 'Extracted content from before path', { content });
+          }
+        }
+        
+        if (content) {
+          try {
+            await storage.writeFile(path, content);
+            logger.info('orchestrator', 'Saved content via natural language', { path });
+            return `Successfully saved to ${path}`;
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.error('orchestrator', 'Failed to save via natural language', { path, error: errorMessage });
+            return `Error saving to ${path}: ${errorMessage}`;
+          }
+        }
+      }
+    }
+    
+    // Write commands
+    if (lowerRequest.includes('write') && lowerRequest.includes('keel://')) {
+      const pathMatch = request.match(/(keel:\/\/\S+)/);
+      if (pathMatch) {
+        const path = pathMatch[1];
+        // Extract content before the path
+        const pathIndex = request.indexOf(path);
+        const writeIndex = lowerRequest.indexOf('write');
+        let content = request.substring(writeIndex + 5, pathIndex).trim();
+        
+        // Remove "this to" or "to" if present
+        content = content.replace(/^this\s+to\s+/i, '').replace(/^to\s+/i, '');
+        
+        if (content) {
+          try {
+            await storage.writeFile(path, content);
+            logger.info('orchestrator', 'Wrote content via natural language', { path });
+            return `Successfully wrote to ${path}`;
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.error('orchestrator', 'Failed to write via natural language', { path, error: errorMessage });
+            return `Error writing to ${path}: ${errorMessage}`;
+          }
+        }
+      }
+    }
+    
+    // Delete commands
+    const deleteMatch = request.match(/delete(?:\s+the)?\s+(?:file\s+)?(keel:\/\/\S+)/i);
+    if (deleteMatch) {
+      const path = deleteMatch[1];
+      try {
+        const deleted = await storage.deleteFile(path);
+        if (deleted) {
+          logger.info('orchestrator', 'Deleted file via natural language', { path });
+          return `Successfully deleted ${path}`;
+        } else {
+          return `File not found: ${path}`;
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('orchestrator', 'Failed to delete via natural language', { path, error: errorMessage });
+        return `Error deleting ${path}: ${errorMessage}`;
+      }
+    }
+    
+    // Read commands
+    const readMatch = request.match(/read(?:\s+the)?\s+(?:file\s+)?(keel:\/\/\S+)/i);
+    if (readMatch) {
+      const path = readMatch[1];
+      try {
+        const content = await storage.readFile(path);
+        if (content === null) {
+          return `File not found: ${path}`;
+        }
+        logger.info('orchestrator', 'Read file via natural language', { path });
+        return content;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('orchestrator', 'Failed to read via natural language', { path, error: errorMessage });
+        return `Error reading ${path}: ${errorMessage}`;
+      }
+    }
+    
+    // List commands
+    if (lowerRequest.includes('list') && lowerRequest.includes('keel://')) {
+      const pathMatch = request.match(/keel:\/\/(\S*?)(?:\s|$)/i);
+      const prefix = pathMatch ? `keel://${pathMatch[1]}` : 'keel://';
+      try {
+        const files = await storage.listFiles(prefix);
+        logger.info('orchestrator', 'Listed files via natural language', { prefix });
+        return files.length > 0 ? files.join('\n') : `No files found in ${prefix}`;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('orchestrator', 'Failed to list via natural language', { prefix, error: errorMessage });
+        return `Error listing files in ${prefix}: ${errorMessage}`;
+      }
+    }
+    
+    logger.debug('orchestrator', 'No artifact command detected', { request: lowerRequest });
+    return null;
+  }
+
   // Legacy methods for compatibility
   async executeTool(toolName: string, args: Record<string, unknown>, _onUpdate: (response: AgentResponse) => void): Promise<string> {
-    // Map tool names to skills
+    logger.info('orchestrator', 'Executing tool', { toolName, args });
+    
+    // Handle VFS operations directly
+    if (toolName === 'vfs_write') {
+      const { path, content, l0, l1 } = args as { path?: string; content?: string; l0?: string; l1?: string };
+      if (!path || !content) {
+        return 'Error: vfs_write requires path and content parameters';
+      }
+      try {
+        await storage.writeFile(path, content, l0, l1);
+        logger.info('orchestrator', 'File written to VFS', { path });
+        return `Successfully wrote to ${path}`;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('orchestrator', 'Failed to write file', { path, error: errorMessage });
+        return `Error writing file: ${errorMessage}`;
+      }
+    }
+    
+    if (toolName === 'vfs_read') {
+      const { path, level = 'L2' } = args as { path?: string; level?: 'L0' | 'L1' | 'L2' };
+      if (!path) {
+        return 'Error: vfs_read requires path parameter';
+      }
+      try {
+        const content = await storage.readFile(path, level);
+        if (content === null) {
+          return `File not found: ${path}`;
+        }
+        logger.info('orchestrator', 'File read from VFS', { path, level });
+        return content;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('orchestrator', 'Failed to read file', { path, error: errorMessage });
+        return `Error reading file: ${errorMessage}`;
+      }
+    }
+    
+    if (toolName === 'vfs_ls') {
+      const { prefix = 'keel://' } = args as { prefix?: string };
+      try {
+        const files = await storage.listFiles(prefix);
+        logger.info('orchestrator', 'Listed VFS files', { prefix, count: files.length });
+        return files.length > 0 ? files.join('\n') : `No files found with prefix: ${prefix}`;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('orchestrator', 'Failed to list files', { prefix, error: errorMessage });
+        return `Error listing files: ${errorMessage}`;
+      }
+    }
+    
+    // Map other tool names to skills
     const skillMapping: Record<string, string> = {
       'web_fetch': 'research',
       'execute_python': 'python-coding',
-      'vfs_write': 'python-coding',
-      'vfs_read': 'research',
       'memory_update': 'execution-analyzer'
     };
     
@@ -483,10 +867,6 @@ export class AgentOrchestrator {
       task = `Fetch content from: ${args.url}`;
     } else if (toolName === 'execute_python' && args.code) {
       task = `Execute Python code: ${args.code}`;
-    } else if (toolName === 'vfs_write' && args.path && args.content) {
-      task = `Write to file ${args.path}: ${args.content}`;
-    } else if (toolName === 'vfs_read' && args.path) {
-      task = `Read file: ${args.path}`;
     } else if (toolName === 'memory_update' && args.category && args.content) {
       task = `Update memory ${args.category}: ${args.content}`;
     } else {

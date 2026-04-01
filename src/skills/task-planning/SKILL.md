@@ -49,66 +49,150 @@ Use this skill when you need to:
 
 ### Complexity Assessment
 ```python
-def assess_task_complexity(task_description):
-    """Assess the complexity of a given task."""
-    complexity_factors = {
-        'scope': analyze_scope(task_description),
-        'dependencies': count_dependencies(task_description),
-        'specialized_skills': identify_specialized_requirements(task_description),
-        'ambiguity': measure_ambiguity(task_description),
-        'estimated_steps': estimate_step_count(task_description)
-    }
+# Comprehensive task planning system
+def create_task_plan(task_description):
+    """Create a comprehensive task plan based on task analysis."""
+    import json
     
-    # Calculate overall complexity score
-    score = (
-        complexity_factors['scope'] * 0.3 +
-        complexity_factors['dependencies'] * 0.2 +
-        complexity_factors['specialized_skills'] * 0.25 +
-        complexity_factors['ambiguity'] * 0.15 +
-        complexity_factors['estimated_steps'] * 0.1
-    )
+    log(f"Creating task plan for: {task_description}")
     
-    if score > 0.7:
-        complexity_level = 'high'
-    elif score > 0.4:
-        complexity_level = 'medium'
+    # Analyze task characteristics
+    task_analysis = analyze_task_characteristics(task_description)
+    
+    # Create appropriate plan based on analysis
+    if task_analysis['type'] == 'math_calculation':
+        plan = create_math_plan(task_description, task_analysis)
+    elif task_analysis['type'] == 'data_analysis':
+        plan = create_data_analysis_plan(task_description, task_analysis)
+    elif task_analysis['type'] == 'research':
+        plan = create_research_plan(task_description, task_analysis)
+    elif task_analysis['type'] == 'file_operations':
+        plan = create_file_operations_plan(task_description, task_analysis)
     else:
-        complexity_level = 'low'
+        plan = create_general_plan(task_description, task_analysis)
     
-    log(f"Task complexity assessed as: {complexity_level} (score: {score:.2f})")
+    # Add metadata
+    plan['metadata'] = {
+        'original_task': task_description,
+        'complexity': task_analysis['complexity'],
+        'estimated_steps': len(plan['steps']),
+        'required_skills': task_analysis['required_skills']
+    }
+    
+    log(f"Created plan with {len(plan['steps'])} steps")
+    return plan
+
+def analyze_task_characteristics(task_description):
+    """Analyze task to determine type, complexity, and requirements."""
+    task_lower = task_description.lower()
+    
+    # Task type detection
+    task_type = 'general'
+    if any(word in task_lower for word in ['sum', 'add', 'calculate', 'multiply', 'divide', 'compute']):
+        task_type = 'math_calculation'
+    elif any(word in task_lower for word in ['analyze', 'data', 'statistics', 'dataset']):
+        task_type = 'data_analysis'
+    elif any(word in task_lower for word in ['research', 'find', 'investigate', 'search']):
+        task_type = 'research'
+    elif any(word in task_lower for word in ['file', 'read', 'write', 'save', 'load']):
+        task_type = 'file_operations'
+    
+    # Complexity assessment
+    complexity = 'simple'
+    if any(word in task_lower for word in ['complex', 'multiple', 'several', 'various']):
+        complexity = 'complex'
+    elif any(word in task_lower for word in ['analyze', 'process', 'calculate']):
+        complexity = 'moderate'
+    
+    # Required skills
+    required_skills = []
+    if task_type == 'math_calculation':
+        required_skills = ['python-coding']
+    elif task_type == 'data_analysis':
+        required_skills = ['python-coding', 'data-analysis']
+    elif task_type == 'research':
+        required_skills = ['research']
+    elif task_type == 'file_operations':
+        required_skills = ['python-coding']
+    else:
+        required_skills = ['python-coding']
+    
     return {
-        'level': complexity_level,
-        'score': score,
-        'factors': complexity_factors
+        'type': task_type,
+        'complexity': complexity,
+        'required_skills': required_skills
     }
 
-def analyze_scope(task_description):
-    """Analyze the scope of the task."""
-    scope_indicators = [
-        'analyze', 'create', 'build', 'implement', 'design',
-        'multiple', 'various', 'comprehensive', 'complete', 'full'
-    ]
-    
-    scope_score = sum(1 for indicator in scope_indicators 
-                     if indicator in task_description.lower())
-    
-    return min(scope_score / 5, 1.0)  # Normalize to 0-1
-
-def identify_specialized_requirements(task_description):
-    """Identify specialized skill requirements."""
-    specialized_domains = {
-        'data': ['data', 'dataset', 'analysis', 'statistics', 'pandas'],
-        'web': ['web', 'website', 'fetch', 'scrape', 'api'],
-        'code': ['code', 'programming', 'python', 'script', 'algorithm'],
-        'research': ['research', 'investigate', 'find', 'search', 'study']
+def create_math_plan(task_description, analysis):
+    """Create plan for mathematical calculations."""
+    return {
+        'plan_type': 'math_calculation',
+        'objective': f'Perform mathematical calculation: {task_description}',
+        'steps': [
+            {
+                'step': 1,
+                'title': 'Code Creation',
+                'description': 'Create Python function to perform the calculation',
+                'skill': 'python-coding',
+                'inputs': task_description,
+                'outputs': 'code_artifact'
+            },
+            {
+                'step': 2,
+                'title': 'Code Review',
+                'description': 'Review the created code for correctness and safety',
+                'skill': 'quality-review',
+                'inputs': 'code_artifact',
+                'outputs': 'review_result'
+            },
+            {
+                'step': 3,
+                'title': 'Execution',
+                'description': 'Execute the approved code with user inputs',
+                'skill': 'orchestrator',
+                'inputs': ['approved_artifact', task_description],
+                'outputs': 'final_result'
+            }
+        ]
     }
-    
-    required_domains = []
-    for domain, keywords in specialized_domains.items():
-        if any(keyword in task_description.lower() for keyword in keywords):
-            required_domains.append(domain)
-    
-    return len(required_domains) / 4  # Normalize to 0-1
+
+def create_general_plan(task_description, analysis):
+    """Create general-purpose plan."""
+    return {
+        'plan_type': 'general',
+        'objective': f'Complete task: {task_description}',
+        'steps': [
+            {
+                'step': 1,
+                'title': 'Task Analysis',
+                'description': 'Analyze requirements and create solution approach',
+                'skill': 'python-coding',
+                'inputs': task_description,
+                'outputs': 'code_artifact'
+            },
+            {
+                'step': 2,
+                'title': 'Quality Review',
+                'description': 'Review the created solution',
+                'skill': 'quality-review',
+                'inputs': 'code_artifact',
+                'outputs': 'review_result'
+            },
+            {
+                'step': 3,
+                'title': 'Execution',
+                'description': 'Execute the approved solution',
+                'skill': 'orchestrator',
+                'inputs': ['approved_artifact', task_description],
+                'outputs': 'final_result'
+            }
+        ]
+    }
+
+# Create and output the task plan
+plan = create_task_plan("""{{task}}""")
+print(json.dumps(plan, indent=2))
+log(f"Task plan created with {len(plan['steps'])} steps")
 ```
 
 ### Task Decomposition

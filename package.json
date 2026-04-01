@@ -14,6 +14,8 @@
     "test:agent": "vitest run src/agent-system.unit.test.ts",
     "test:agent:debug": "vitest run src/agent-system.unit.test.ts --reporter=verbose",
     "test:agent:e2e": "vitest run src/agent-system.test.ts",
+    "test:puppeteer": "vitest run src/tests/agent-architecture.puppeteer.test.ts",
+    "test:architecture": "npm run test:puppeteer",
     "skills:index": "./generate-skills-index.sh"
   },
   "dependencies": {
