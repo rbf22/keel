@@ -29,6 +29,10 @@ export function isStorageWithDB(obj: unknown): obj is { db: IDBDatabase } & Reco
 }
 
 export class IndexedDBWrapper {
+    constructor(_dbName: string, _version: number) {
+        // Private parameters stored but not used - this class is incomplete
+    }
+
     /**
      * Safely get file details from IndexedDB with proper error handling
      */

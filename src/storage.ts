@@ -7,47 +7,178 @@ export class KeelStorage {
   private db: IDBDatabase | null = null;
 
   async init() {
+    logger.info("storage", "[INIT] Starting IndexedDB initialization", {
+      dbName: this.dbName,
+      version: this.dbVersion,
+      timestamp: new Date().toISOString()
+    });
+
+    // Check if already initialized
+    if (this.db) {
+      logger.warn("storage", "[INIT] Database already initialized", {
+        dbName: this.dbName
+      });
+      return;
+    }
+
+    // Check for existing database and its version
+    try {
+      logger.debug("storage", "[INIT] Checking existing database versions");
+      const databases = await indexedDB.databases();
+      const existingDb = databases.find(db => db.name === this.dbName);
+      
+      logger.info("storage", "[INIT] Existing database check", {
+        dbName: this.dbName,
+        existingDb: existingDb ? {
+          name: existingDb.name,
+          version: existingDb.version
+        } : null,
+        currentVersion: this.dbVersion
+      });
+    } catch (error) {
+      logger.warn("storage", "[INIT] Failed to check existing databases", {
+        error: error,
+        errorType: error?.constructor?.name
+      });
+    }
+
     return new Promise<void>((resolve, reject) => {
+      logger.debug("storage", "[INIT] Opening IndexedDB connection", {
+        dbName: this.dbName,
+        version: this.dbVersion
+      });
+
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
+      // Track timing
+      const openStartTime = Date.now();
+
+      request.onerror = () => {
+        const duration = Date.now() - openStartTime;
+        const error = request.error;
+        logger.error("storage", "[INIT] Failed to open database", {
+          error: error,
+          errorCode: error?.name,
+          duration: duration,
+          dbName: this.dbName
+        });
+        reject(error);
+      };
+
+      request.onblocked = () => {
+        logger.warn("storage", "[INIT] Database open blocked", {
+          dbName: this.dbName,
+          version: this.dbVersion,
+          duration: Date.now() - openStartTime
+        });
+      };
+
+      request.onsuccess = () => {
+        const duration = Date.now() - openStartTime;
+        this.db = request.result;
+        
+        logger.info("storage", "[INIT] Database opened successfully", {
+          dbName: this.dbName,
+          version: this.dbVersion,
+          duration: duration,
+          objectStoreNames: Array.from(this.db.objectStoreNames)
+        });
+
+        // Verify required object stores exist
+        const requiredStores = ['vfs', 'memories', 'skills'];
+        const missingStores = requiredStores.filter(store => !this.db!.objectStoreNames.contains(store));
+        
+        if (missingStores.length > 0) {
+          logger.error("storage", "[INIT] Missing required object stores", {
+            dbName: this.dbName,
+            missingStores: missingStores,
+            existingStores: Array.from(this.db!.objectStoreNames)
+          });
+          reject(new Error(`Missing object stores: ${missingStores.join(', ')}`));
+          return;
+        }
+
+        logger.info("storage", "[INIT] All required object stores verified", {
+          dbName: this.dbName,
+          stores: requiredStores
+        });
+
+        // Set up error handler for the database
+        this.db.onerror = (event) => {
+          logger.error("storage", "[DB_ERROR] Database error", {
+            dbName: this.dbName,
+            error: (event.target as IDBRequest)?.error,
+            type: event.type
+          });
+        };
+
+        resolve();
+      };
+
       request.onupgradeneeded = (event) => {
+        const duration = Date.now() - openStartTime;
         const db = (event.target as IDBOpenDBRequest).result;
+        const oldVersion = event.oldVersion;
+        const newVersion = event.newVersion;
+        
+        logger.info("storage", "[INIT] Database upgrade needed", {
+          dbName: this.dbName,
+          oldVersion: oldVersion,
+          newVersion: newVersion,
+          duration: duration
+        });
 
         // VFS Store
         if (!db.objectStoreNames.contains("vfs")) {
+          logger.info("storage", "[INIT] Creating VFS store", {
+            dbName: this.dbName
+          });
           db.createObjectStore("vfs", { keyPath: "path" });
         } else {
-            // Migration logic if needed - for now we'll just ensure it's there
+          logger.debug("storage", "[INIT] VFS store already exists", {
+            dbName: this.dbName
+          });
         }
 
         // Memories Store
         if (!db.objectStoreNames.contains("memories")) {
+          logger.info("storage", "[INIT] Creating memories store with index", {
+            dbName: this.dbName
+          });
           const memoryStore = db.createObjectStore("memories", { keyPath: "id", autoIncrement: true });
           memoryStore.createIndex("category", "category", { unique: false });
         } else {
-            // Update memories if needed
-            const transaction = (event.target as IDBOpenDBRequest).transaction!;
-            const memoryStore = transaction.objectStore("memories");
-            if (!memoryStore.indexNames.contains("category")) {
-                memoryStore.createIndex("category", "category", { unique: false });
-            }
+          logger.debug("storage", "[INIT] Memories store exists, checking index", {
+            dbName: this.dbName
+          });
+          // Update memories if needed
+          const transaction = (event.target as IDBOpenDBRequest).transaction!;
+          const memoryStore = transaction.objectStore("memories");
+          if (!memoryStore.indexNames.contains("category")) {
+            logger.info("storage", "[INIT] Adding category index to memories store", {
+              dbName: this.dbName
+            });
+            memoryStore.createIndex("category", "category", { unique: false });
+          }
         }
 
         // Skills Store
         if (!db.objectStoreNames.contains("skills")) {
+          logger.info("storage", "[INIT] Creating skills store", {
+            dbName: this.dbName
+          });
           db.createObjectStore("skills", { keyPath: "id" });
+        } else {
+          logger.debug("storage", "[INIT] Skills store already exists", {
+            dbName: this.dbName
+          });
         }
-      };
 
-      request.onsuccess = (event) => {
-        this.db = (event.target as IDBOpenDBRequest).result;
-        logger.info("storage", "IndexedDB initialized v" + this.dbVersion);
-        resolve();
-      };
-
-      request.onerror = (event) => {
-        logger.error("storage", "IndexedDB error", { error: (event.target as IDBOpenDBRequest).error });
-        reject((event.target as IDBOpenDBRequest).error);
+        logger.info("storage", "[INIT] Database upgrade complete", {
+          dbName: this.dbName,
+          finalVersion: newVersion,
+          objectStoreNames: Array.from(db.objectStoreNames)
+        });
       };
     });
   }

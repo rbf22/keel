@@ -223,6 +223,10 @@ button:disabled {
   align-items: center;
 }
 
+.context-header span {
+  color: white;
+}
+
 .logs-container, .context-container {
   padding: 1rem;
   overflow-y: auto;
@@ -512,6 +516,13 @@ button:disabled {
   font-size: 0.75rem;
 }
 
+/* General pre element styling */
+pre {
+  color: white;
+  background: transparent;
+  margin: 0;
+}
+
 .skill-instructions pre,
 .skill-code pre {
   background: #1e1e1e;
@@ -551,7 +562,7 @@ button:disabled {
 }
 
 .subtab-btn.active {
-  color: #fff;
+  color: #000;
   border-bottom-color: #1976d2;
 }
 
@@ -597,6 +608,26 @@ button:disabled {
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   font-size: 0.8rem;
+}
+
+/* Model Select with Icons */
+#modelSelect {
+  min-width: 300px;
+}
+
+#modelSelect option {
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#modelSelect option.cached-model {
+  background-image: url('/icons/cached.png');
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 16px 16px;
+  padding-right: 32px;
 }
 
 .status-ready {

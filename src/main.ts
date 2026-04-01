@@ -209,6 +209,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (tab === 'context') {
         void refreshVFSDisplay();
     }
+    
+    // Update model select cache status when settings is shown
+    if (tab === 'settings') {
+        void updateModelSelectWithCacheStatus();
+    }
 
     // Hide notification dot if logs tab is clicked
     if (tab === 'logs') {
@@ -478,19 +483,134 @@ copyLogsBtn.onclick = async () => {
     return text;
   }).join('\n\n');
 
+  // Fallback method for copying
+  const fallbackCopy = () => {
+    const textArea = document.createElement('textarea');
+    textArea.value = logText;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    
+    try {
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return successful;
+    } catch (err) {
+      document.body.removeChild(textArea);
+      return false;
+    }
+  };
+
+  // Check if we're in an iframe
+  const inIframe = window.parent !== window;
+
   try {
-    await navigator.clipboard.writeText(logText);
-    const originalText = copyLogsBtn.textContent;
-    copyLogsBtn.textContent = 'Copied!';
-    setTimeout(() => {
-      copyLogsBtn.textContent = originalText;
-    }, UI_BUTTON_RESET_DELAY);
+    // If in iframe or clipboard might be blocked, use fallback directly
+    if (inIframe) {
+      logger.info('main', 'Using fallback copy method due to iframe environment');
+      const success = fallbackCopy();
+      if (success) {
+        const originalText = copyLogsBtn.textContent;
+        copyLogsBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyLogsBtn.textContent = originalText;
+        }, UI_BUTTON_RESET_DELAY);
+      } else {
+        throw new Error('Fallback copy method failed');
+      }
+    } else {
+      // Try modern clipboard API first
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(logText);
+        const originalText = copyLogsBtn.textContent;
+        copyLogsBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyLogsBtn.textContent = originalText;
+        }, UI_BUTTON_RESET_DELAY);
+      } else {
+        // Fallback for older browsers
+        const success = fallbackCopy();
+        if (success) {
+          const originalText = copyLogsBtn.textContent;
+          copyLogsBtn.textContent = 'Copied!';
+          setTimeout(() => {
+            copyLogsBtn.textContent = originalText;
+          }, UI_BUTTON_RESET_DELAY);
+        } else {
+          throw new Error('Fallback copy method failed');
+        }
+      }
+    }
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    logger.error('main', 'Failed to copy logs', { error: err });
-    alert(`Failed to copy logs to clipboard: ${errorMessage}`);
+    logger.error('main', 'Failed to copy logs', { error: err, inIframe });
+    
+    // Show error and offer alternative
+    const originalText = copyLogsBtn.textContent;
+    copyLogsBtn.textContent = 'Copy Failed!';
+    copyLogsBtn.style.backgroundColor = '#d32f2f';
+    setTimeout(() => {
+      copyLogsBtn.textContent = originalText;
+      copyLogsBtn.style.backgroundColor = '';
+    }, 3000);
+    
+    // Also log to console for manual copying
+    console.error('Failed to copy logs to clipboard. Error:', errorMessage);
+    console.log('--- LOGS START ---');
+    console.log(logText);
+    console.log('--- LOGS END ---');
+    
+    // Show user-friendly message
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #d32f2f;
+      color: white;
+      padding: 1rem;
+      border-radius: 8px;
+      max-width: 400px;
+      z-index: 10000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    `;
+    errorDiv.innerHTML = `
+      <strong>Failed to copy logs!</strong><br>
+      Check browser console (F12) for logs.<br>
+      <small>Error: ${errorMessage}</small>
+    `;
+    document.body.appendChild(errorDiv);
+    setTimeout(() => document.body.removeChild(errorDiv), 5000);
   }
 };
+
+// Update model select with cache status
+async function updateModelSelectWithCacheStatus() {
+  try {
+    const cachedModels = await LocalLLMEngine.getAllCachedModels();
+    const cachedModelIds = new Set(cachedModels.filter(m => !m.isCorrupted).map(m => m.modelId));
+    
+    // Update select options
+    const options = SUPPORTED_MODELS.map(m => {
+      const isCached = cachedModelIds.has(m.modelId);
+      const cachedClass = isCached ? ' cached-model' : '';
+      return `<option value="${m.modelId}" class="${cachedClass}">${m.displayName} (~${m.vramRequiredMB}MB)</option>`;
+    });
+    
+    modelSelect.innerHTML = options.join('');
+    
+    // Restore selected value if it exists
+    const savedModelId = localStorage.getItem('selectedModelId');
+    if (savedModelId && SUPPORTED_MODELS.some(m => m.modelId === savedModelId)) {
+      modelSelect.value = savedModelId;
+    }
+  } catch (error) {
+    console.error('Failed to update model select with cache status:', error);
+  }
+}
 
 async function initSettings() {
   const savedModelId = localStorage.getItem('selectedModelId');
@@ -500,6 +620,9 @@ async function initSettings() {
     const recommendedModelId = await detectBestModel();
     modelSelect.value = recommendedModelId;
   }
+  
+  // Update model select with cache status
+  await updateModelSelectWithCacheStatus();
 
   const savedApiKey = localStorage.getItem('geminiApiKey');
   if (savedApiKey) geminiApiKeyInput.value = savedApiKey;
@@ -542,11 +665,13 @@ async function updateModelsDisplay() {
     const models = await LocalLLMEngine.getAllCachedModels();
     const totalSize = models.reduce((sum, model) => sum + model.size, 0);
     const totalSizeMB = (totalSize / 1024 / 1024).toFixed(1);
+    const corruptedCount = models.filter(m => m.isCorrupted).length;
     
     storageUsage.innerHTML = `
       <div class="storage-summary">
         <strong>Total Storage:</strong> ${totalSizeMB} MB
         <br><strong>Cached Models:</strong> ${models.length}
+        ${corruptedCount > 0 ? `<br><span style="color: #ff6b6b;"><strong>⚠️ Corrupted:</strong> ${corruptedCount}</span>` : ''}
       </div>
     `;
     
@@ -555,11 +680,31 @@ async function updateModelsDisplay() {
     } else {
       modelsList.innerHTML = models.map(model => {
         const sizeMB = (model.size / 1024 / 1024).toFixed(1);
+        let corruptedText = '';
+        let usableText = '';
+        let statusClass = '';
+        
+        if (model.isEmpty) {
+          corruptedText = ' <span style="color: #ffa500;">(EMPTY CACHE)</span>';
+          usableText = '<span style="color: #ffa500;">⚠️ Cache Empty</span>';
+          statusClass = 'empty-cache';
+        } else if (model.isCorrupted) {
+          corruptedText = ' <span style="color: #ff6b6b;">(CORRUPTED)</span>';
+          usableText = '<span style="color: #ff6b6b;">❌ Not usable</span>';
+          statusClass = 'corrupted';
+        } else {
+          usableText = '<span style="color: #51cf66;">✅ Ready to use</span>';
+          statusClass = 'ready';
+        }
+        
         return `
-          <div class="model-item">
+          <div class="model-item ${statusClass}">
             <div class="model-info">
-              <strong>${model.modelId}</strong>
+              <strong>${model.modelId}</strong>${corruptedText}
               <span class="model-size">${sizeMB} MB</span>
+            </div>
+            <div class="model-status">
+              ${usableText}
             </div>
           </div>
         `;
@@ -567,7 +712,7 @@ async function updateModelsDisplay() {
     }
   } catch (error) {
     console.error('Failed to update models display:', error);
-    storageUsage.innerHTML = '<div class="output-log">Error loading model information.</div>';
+    storageUsage.innerHTML = '<div class="output-log">Error loading model info.</div>';
     modelsList.innerHTML = '';
   }
 }
@@ -584,6 +729,72 @@ refreshModelsBtn.onclick = async () => {
   }
 };
 
+// Add button to clear corrupted models
+const clearCorruptedBtn = document.createElement('button');
+clearCorruptedBtn.className = 'button';
+clearCorruptedBtn.textContent = 'Clear Problematic';
+clearCorruptedBtn.style.marginLeft = '10px';
+clearCorruptedBtn.title = 'Clear corrupted and empty model caches';
+clearCorruptedBtn.onclick = async () => {
+  const models = await LocalLLMEngine.getAllCachedModels();
+  const corruptedModels = models.filter(m => m.isCorrupted);
+  const emptyModels = models.filter(m => m.isEmpty);
+  
+  if (corruptedModels.length === 0 && emptyModels.length === 0) {
+    clearCorruptedBtn.textContent = 'None Found';
+    setTimeout(() => {
+      clearCorruptedBtn.textContent = 'Clear Problematic';
+    }, 2000);
+    return;
+  }
+  
+  const totalToClear = corruptedModels.length + emptyModels.length;
+  const message = `Clear ${totalToClear} problematic model(s)?\n` +
+    `${corruptedModels.length > 0 ? `• ${corruptedModels.length} corrupted\n` : ''}` +
+    `${emptyModels.length > 0 ? `• ${emptyModels.length} empty caches\n` : ''}` +
+    `\nThis will remove the broken cache entries.`;
+  
+  if (!confirm(message)) {
+    return;
+  }
+  
+  clearCorruptedBtn.textContent = 'Clearing...';
+  clearCorruptedBtn.disabled = true;
+  
+  try {
+    // Clear each corrupted and empty model cache
+    const allToClear = [...corruptedModels, ...emptyModels];
+    for (const model of allToClear) {
+      const cacheKey = `web-llm-${model.modelId}`;
+      await caches.delete(cacheKey);
+      logger.info('main', `Cleared problematic cache: ${model.modelId}`, {
+        reason: model.isEmpty ? 'empty' : 'corrupted'
+      });
+    }
+    
+    await updateModelsDisplay();
+    await updateModelSelectWithCacheStatus(); // Update model select after clearing
+    
+    clearCorruptedBtn.textContent = 'Cleared!';
+    setTimeout(() => {
+      clearCorruptedBtn.textContent = 'Clear Problematic';
+    }, 2000);
+  } catch (error) {
+    console.error('Failed to clear corrupted models:', error);
+    clearCorruptedBtn.textContent = 'Error';
+    setTimeout(() => {
+      clearCorruptedBtn.textContent = 'Clear Problematic';
+    }, 2000);
+  } finally {
+    clearCorruptedBtn.disabled = false;
+  }
+};
+
+// Insert the new button after refresh button
+if (refreshModelsBtn.parentNode) {
+  refreshModelsBtn.parentNode.insertBefore(clearCorruptedBtn, refreshModelsBtn.nextSibling);
+}
+
 clearAllModelsBtn.onclick = async () => {
   if (!confirm('Are you sure you want to clear all cached models? This will force re-downloading models next time you use them.')) {
     return;
@@ -595,6 +806,7 @@ clearAllModelsBtn.onclick = async () => {
   try {
     await LocalLLMEngine.clearAllCachedModels();
     await updateModelsDisplay();
+    await updateModelSelectWithCacheStatus(); // Update model select after clearing
     
     const originalText = clearAllModelsBtn.textContent;
     clearAllModelsBtn.textContent = 'Cleared!';
@@ -1244,7 +1456,8 @@ document.querySelectorAll('.subtab-btn').forEach(btn => {
     
     // Update storage usage when models tab is shown
     if (subtab === 'models') {
-      updateStorageUsage()
+      void updateModelsDisplay();
+      void updateModelSelectWithCacheStatus();
     }
   })
 })

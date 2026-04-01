@@ -58,7 +58,6 @@ export class AgentOrchestrator {
   
   // Code artifact context sharing
   private currentArtifact: CodeArtifact | null = null;
-  private currentReview: ReviewResult | null = null;
 
   constructor(_engine: LLMEngine, python: PythonRuntime) {
     // this.engine = engine; // Currently unused in skill-based architecture
@@ -456,7 +455,6 @@ export class AgentOrchestrator {
         // Try to parse result as a review
         try {
           const review: ReviewResult = JSON.parse(result);
-          this.currentReview = review;
           logger.info("orchestrator", `Review completed: ${review.recommendation} for artifact ${review.artifact_id}`);
           
           if (review.approved && this.currentArtifact) {
