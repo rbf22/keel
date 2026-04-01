@@ -1,5 +1,4 @@
-import { Persona } from "./personas";
-import { storage } from "./storage";
+import { skillsEngine } from "./skills/engine";
 
 export interface Tool {
   name: string;
@@ -83,45 +82,17 @@ export const TOOLS: Record<string, Tool> = {
       },
       required: ["code"]
     }
-  },
-  "delegate": {
-    name: "delegate",
-    description: "Hand off the task to another specialized agent.",
-    parameters: {
-      type: "object",
-      properties: {
-        agent: {
-          type: "string",
-          enum: ["researcher", "coder", "reviewer", "observer"],
-          description: "The ID of the agent to delegate to."
-        },
-        instruction: {
-          type: "string",
-          description: "Specific instructions for the delegated agent."
-        }
-      },
-      required: ["agent", "instruction"]
-    }
   }
 };
 
-export async function getSystemContext(persona: Persona): Promise<string> {
+export function getSkillsContext(): string {
   const toolsPrompt = Object.values(TOOLS).map(t => {
     return `TOOL: ${t.name}\nDescription: ${t.description}\nParameters: ${JSON.stringify(t.parameters)}`;
   }).join("\n\n");
 
-  const memories = await storage.getMemories();
-  const memoryContext = memories.map(m => `[${m.category.toUpperCase()}] ${m.content}`).join("\n");
-
-  const files = await storage.listFiles();
-  const vfsContext = files.join("\n");
+  const skillsPrompt = skillsEngine.getSkillsDescription();
 
   return `
-${persona.basePrompt}
-
-Your Role: ${persona.role}
-Your Description: ${persona.description}
-
 ### AVAILABLE TOOLS
 To use a tool, respond with:
 CALL: tool_name
@@ -130,13 +101,11 @@ ARGUMENTS: { "arg1": "val1" }
 Tools:
 ${toolsPrompt}
 
-### CURRENT CONTEXT (keel://)
-Files:
-${vfsContext}
+### AVAILABLE SKILLS
+Skills are automatically selected and executed based on task requirements.
 
-### LONG-TERM MEMORY
-${memoryContext || "No long-term memories yet."}
+${skillsPrompt}
 
-Stay in character. Be precise.
+Use the appropriate skill for your task or call tools directly when needed.
 `;
 }

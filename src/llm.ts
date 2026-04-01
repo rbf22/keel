@@ -320,11 +320,40 @@ export class LocalLLMEngine implements ILLMEngine {
     this.onUpdate("Initializing Service Worker Engine...");
     
     try {
-      // Create the engine using CreateServiceWorkerMLCEngine
-      this.engine = await webllm.CreateServiceWorkerMLCEngine(
-        this.modelId,
-        engineConfig
-      );
+      // Add timeout wrapper to prevent indefinite hanging
+      const ENGINE_INIT_TIMEOUT = 60000; // 60 seconds
+      
+      logger.info("llm", `Creating ServiceWorkerMLCEngine with ${ENGINE_INIT_TIMEOUT}ms timeout`, { 
+        modelId: this.modelId 
+      });
+      
+      // Create timeout with cleanup capability
+      let timeoutId: number | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          logger.error("llm", "ServiceWorkerMLCEngine initialization timed out", { 
+            timeout: ENGINE_INIT_TIMEOUT,
+            modelId: this.modelId 
+          });
+          reject(new Error(`ServiceWorkerMLCEngine initialization timed out after ${ENGINE_INIT_TIMEOUT}ms`));
+        }, ENGINE_INIT_TIMEOUT);
+      });
+      
+      // Create the engine using CreateServiceWorkerMLCEngine with timeout
+      try {
+        this.engine = await Promise.race([
+          webllm.CreateServiceWorkerMLCEngine(
+            this.modelId,
+            engineConfig
+          ),
+          timeoutPromise
+        ]);
+      } finally {
+        // Always clear the timeout to prevent memory leaks
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
       
       logger.info("llm", `ServiceWorkerMLCEngine initialized successfully: ${this.modelId}`);
     } catch (error) {
@@ -367,6 +396,12 @@ export class LocalLLMEngine implements ILLMEngine {
       throw new Error("Generation already in progress");
     }
 
+    // Ensure flag is always reset, even if errors occur
+    const resetGeneratingFlag = () => {
+      this.isGenerating = false;
+      logger.debug('llm', 'Reset generating flag to false');
+    };
+
     this.isGenerating = true;
     logger.debug('llm', 'Set generating flag to true');
 
@@ -378,7 +413,7 @@ export class LocalLLMEngine implements ILLMEngine {
 
     if (signal?.aborted) {
       logger.info('llm', 'Generation aborted before start');
-      this.isGenerating = false;
+      resetGeneratingFlag();
       throw new Error("Generation aborted");
     }
 
@@ -430,7 +465,7 @@ export class LocalLLMEngine implements ILLMEngine {
       logger.error("llm", `Local generation error: ${errorMessage}`, { error: err });
       throw new Error(errorMessage);
     } finally {
-      this.isGenerating = false;
+      resetGeneratingFlag();
     }
   }
 

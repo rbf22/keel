@@ -20,6 +20,29 @@ This repository contains a working example of a "PadAgent Core" PWA. It runs a l
 3. Start the dev server: `npm run dev`
 4. Open the provided URL in a WebGPU-enabled browser (e.g., Chrome Desktop or Safari on iPadOS 17.4+).
 
+### Testing
+The project includes comprehensive tests for the agentic system:
+
+#### Run All Tests
+```bash
+npm test                    # Run all unit tests (excludes e2e)
+npm run test:watch          # Run tests in watch mode
+npm run test:coverage       # Run tests with coverage report
+```
+
+#### Agent System Tests
+```bash
+npm run test:agent          # Run agent system unit tests
+npm run test:agent:debug    # Run agent tests with verbose output
+npm run test:agent:e2e      # Run Puppeteer e2e tests (requires dev server)
+```
+
+#### Test Coverage
+- **Unit Tests**: Core functionality, orchestrator, LLM engine, Python runtime
+- **Integration Tests**: Multi-agent workflows and tool execution
+- **Agent System Tests**: Manager delegation, loop detection, prompt validation
+- **E2E Tests**: Browser-based testing with Puppeteer (optional)
+
 ### How to Host on GitHub Pages
 1. Push this code to your GitHub repository.
 2. The included GitHub Action (`.github/workflows/deploy.yml`) will automatically build and deploy the app.

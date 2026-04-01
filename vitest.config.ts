@@ -6,7 +6,12 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     globals: true,
     testTimeout: 10000,
-    hookTimeout: 10000
+    hookTimeout: 10000,
+    exclude: [
+      'node_modules/**',
+      'dist/**',
+      '**/agent-system*.test.ts' // Exclude Puppeteer tests from main suite
+    ]
   },
   resolve: {
     alias: {

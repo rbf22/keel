@@ -28,7 +28,7 @@ export class OrchestratorTestAdapter {
   /**
    * Run a task and capture all events that would normally be sent to callbacks
    */
-  async runTaskAndCaptureEvents(request: string, agents?: string[]): Promise<OrchestratorEvent[]> {
+  async runTaskAndCaptureEvents(request: string, _agents?: string[]): Promise<OrchestratorEvent[]> {
     this.events = []
     
     // Create a callback that captures all events
@@ -42,7 +42,7 @@ export class OrchestratorTestAdapter {
     }
     
     // Run the orchestrator with our capturing callback
-    await this.orchestrator.runTask(request, captureCallback, agents)
+    await this.orchestrator.runTask(request, captureCallback)
     
     return this.events
   }
@@ -68,5 +68,12 @@ export class OrchestratorTestAdapter {
    */
   clearEvents(): void {
     this.events = []
+  }
+
+  /**
+   * Get the orchestrator instance for direct testing
+   */
+  getOrchestrator(): AgentOrchestrator {
+    return this.orchestrator
   }
 }

@@ -1,7 +1,15 @@
 /// <reference lib="webworker" />
 import { ServiceWorkerMLCEngineHandler } from "@mlc-ai/web-llm";
 
-let handler: ServiceWorkerMLCEngineHandler;
+let handler: ServiceWorkerMLCEngineHandler | null = null;
+
+// Cleanup function to prevent memory leaks
+function cleanup() {
+  if (handler) {
+    // Clean up any resources held by the handler
+    handler = null;
+  }
+}
 
 self.addEventListener("install", () => {
   console.info("Service Worker: Install event");
@@ -11,6 +19,35 @@ self.addEventListener("install", () => {
 self.addEventListener("activate", function (event) {
   handler = new ServiceWorkerMLCEngineHandler();
   console.log("Service Worker is ready");
-  event.waitUntil((self as any).clients.claim());
+  (event as any).waitUntil((self as any).clients.claim());
   console.info("Service Worker: Activated and Claimed");
 });
+
+// Add message listener for debugging with proper cleanup
+self.addEventListener("message", (event) => {
+  console.log("Service Worker received message:", event.data);
+  if (handler && (handler as any).onMessage) {
+    try {
+      (handler as any).onMessage(event);
+    } catch (error) {
+      console.error("Service Worker message handler error:", error);
+    }
+  }
+});
+
+// Add error handling
+self.addEventListener("error", (event) => {
+  console.error("Service Worker error:", event.error);
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+  console.error("Service Worker unhandled rejection:", event.reason);
+});
+
+// Cleanup on termination
+self.addEventListener("beforeunload", () => {
+  cleanup();
+});
+
+// Export cleanup for external use if needed
+export { cleanup };

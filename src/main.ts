@@ -889,7 +889,7 @@ export async function handleSend(overrideText?: string, retryCount = 0) {
         }
 
         messagesEl.scrollTop = messagesEl.scrollHeight;
-      }, undefined, signal);
+      });
     } catch (err: unknown) {
       if (taskId !== currentTaskId) return;
       if (signal.aborted) {

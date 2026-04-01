@@ -12,7 +12,10 @@ describe('Tools Module', () => {
       expect(TOOLS).toHaveProperty('vfs_write')
       expect(TOOLS).toHaveProperty('vfs_read')
       expect(TOOLS).toHaveProperty('vfs_ls')
-      expect(TOOLS).toHaveProperty('delegate')
+      expect(TOOLS).toHaveProperty('memory_update')
+      expect(TOOLS).toHaveProperty('web_fetch')
+      expect(TOOLS).toHaveProperty('execute_python')
+      // Note: delegate tool was removed in skill-based architecture
     })
 
     it('should have proper tool structure', () => {
@@ -39,11 +42,17 @@ describe('Tools Module', () => {
       expect(vfsRead.parameters.properties.level.enum).toEqual(['L0', 'L1', 'L2'])
     })
 
-    it('should validate delegate tool parameters', () => {
-      const delegate = TOOLS.delegate
-      expect(delegate.parameters.required).toEqual(['agent', 'instruction'])
-      expect(delegate.parameters.properties.agent.type).toBe('string')
-      expect(delegate.parameters.properties.instruction.type).toBe('string')
+    it('should validate execute_python tool parameters', () => {
+      const executePython = TOOLS.execute_python
+      expect(executePython.parameters.required).toEqual(['code'])
+      expect(executePython.parameters.properties.code.type).toBe('string')
+    })
+
+    it('should validate memory_update tool parameters', () => {
+      const memoryUpdate = TOOLS.memory_update
+      expect(memoryUpdate.parameters.required).toEqual(['category', 'content'])
+      expect(memoryUpdate.parameters.properties.category.type).toBe('string')
+      expect(memoryUpdate.parameters.properties.content.type).toBe('string')
     })
   })
 })

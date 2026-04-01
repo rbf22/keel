@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent System Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .status.ready { background-color: #d4edda; color: #155724; }
+        .status.error { background-color: #f8d7da; color: #721c24; }
+        .status.info { background-color: #d1ecf1; color: #0c5460; }
+        .log-container {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px 4px;
+        }
+        .log-manager { background-color: #fff3cd; }
+        .log-coder { background-color: #d1ecf1; }
+        .log-reviewer { background-color: #d4edda; }
+        .log-observer { background-color: #e2e3e5; }
+        .log-system { background-color: #f8d7da; }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agent System Test Interface</h1>
+        
+        <div id="status" class="status info">Initializing...</div>
+        
+        <div class="controls">
+            <input type="text" id="taskInput" placeholder="Enter task for agents..." value="Calculate 2x3">
+            <button id="submitTask">Submit Task</button>
+            <button id="clearLogs">Clear Logs</button>
+            <button id="runTestSuite">Run Test Suite</button>
+        </div>
+        
+        <div class="controls">
+            <button id="testDelegation">Test Delegation</button>
+            <button id="testCalculation">Test Calculation</button>
+            <button id="testLoopDetection">Test Loop Detection</button>
+            <button id="testToolFormat">Test Tool Format</button>
+        </div>
+        
+        <div class="log-container" id="logContainer"></div>
+    </div>
+
+    <script type="module">
+        // Import the necessary modules
+        import { LLMEngine } from './src/llm.js';
+        import { AgentOrchestrator } from './src/orchestrator.js';
+        import { PythonRuntime } from './src/python-runtime.js';
+        import { storage } from './src/storage.js';
+
+        class AgentSystemTestInterface {
+            constructor() {
+                this.orchestrator = null;
+                this.ready = false;
+                this.currentTask = null;
+                this.responses = [];
+                this.updateCallback = null;
+            }
+
+            async initialize() {
+                try {
+                    this.updateStatus('Initializing LLM engine...', 'info');
+                    
+                    // Initialize LLM engine
+                    const engine = new LLMEngine({
+                        model: "Llama-3.1-8B-Instruct-q4f16_1-MLC",
+                        model_lib: "Llama-3.1-8B-Instruct-q4f16_1-MLC"
+                    });
+
+                    // Initialize Python runtime
+                    const python = new PythonRuntime();
+                    
+                    // Initialize orchestrator
+                    this.orchestrator = new AgentOrchestrator(engine, python);
+                    
+                    this.updateStatus('System ready for testing', 'ready');
+                    this.ready = true;
+                    
+                    // Set up global interface for Puppeteer tests
+                    window.keelSystem = {
+                        ready: this.ready,
+                        submitTask: this.submitTask.bind(this),
+                        setUpdateCallback: this.setUpdateCallback.bind(this)
+                    };
+                    
+                    console.log('Agent system initialized successfully');
+                } catch (error) {
+                    console.error('Failed to initialize agent system:', error);
+                    this.updateStatus(`Initialization failed: ${error.message}`, 'error');
+                }
+            }
+
+            setUpdateCallback(callback) {
+                this.updateCallback = callback;
+            }
+
+            async submitTask(task) {
+                if (!this.ready || !this.orchestrator) {
+                    throw new Error('System not ready');
+                }
+
+                this.currentTask = task;
+                this.clearLogs();
+                this.log('system', `Task submitted: ${task}`, 'info');
+
+                try {
+                    const responses = await this.orchestrator.runTask(
+                        task,
+                        (response) => {
+                            this.responses.push(response);
+                            this.log(response.personaId, response.content, response.type);
+                            
+                            // Call the test callback if set
+                            if (this.updateCallback) {
+                                this.updateCallback(response);
+                            }
+                        }
+                    );
+                    
+                    this.log('system', 'Task completed successfully', 'info');
+                    return responses;
+                } catch (error) {
+                    this.log('system', `Task failed: ${error.message}`, 'error');
+                    throw error;
+                }
+            }
+
+            log(agent, message, type = 'info') {
+                const logContainer = document.getElementById('logContainer');
+                const entry = document.createElement('div');
+                entry.className = `log-entry log-${agent}`;
+                
+                const timestamp = new Date().toLocaleTimeString();
+                entry.textContent = `[${timestamp}] [${agent.toUpperCase()}] ${message}`;
+                
+                logContainer.appendChild(entry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+                
+                console.log(`[${agent.toUpperCase()}] ${message}`);
+            }
+
+            updateStatus(message, type = 'info') {
+                const status = document.getElementById('status');
+                status.textContent = message;
+                status.className = `status ${type}`;
+            }
+
+            clearLogs() {
+                document.getElementById('logContainer').innerHTML = '';
+                this.responses = [];
+            }
+
+            // Test methods for Puppeteer
+            async testDelegation() {
+                return this.submitTask('Calculate 2x3');
+            }
+
+            async testCalculation() {
+                return this.submitTask('Calculate 2x3 and return the result');
+            }
+
+            async testLoopDetection() {
+                return this.submitTask('Keep calculating 2x3 until I say stop');
+            }
+
+            async testToolFormat() {
+                return this.submitTask('Write a Python function to calculate factorial');
+            }
+        }
+
+        // Initialize the system
+        const testInterface = new AgentSystemTestInterface();
+        
+        // Set up event listeners
+        document.getElementById('submitTask').addEventListener('click', async () => {
+            const taskInput = document.getElementById('taskInput');
+            const task = taskInput.value.trim();
+            if (task) {
+                try {
+                    await testInterface.submitTask(task);
+                } catch (error) {
+                    console.error('Task failed:', error);
+                }
+            }
+        });
+
+        document.getElementById('clearLogs').addEventListener('click', () => {
+            testInterface.clearLogs();
+        });
+
+        // Test suite buttons
+        document.getElementById('testDelegation').addEventListener('click', () => {
+            testInterface.testDelegation();
+        });
+
+        document.getElementById('testCalculation').addEventListener('click', () => {
+            testInterface.testCalculation();
+        });
+
+        document.getElementById('testLoopDetection').addEventListener('click', () => {
+            testInterface.testLoopDetection();
+        });
+
+        document.getElementById('testToolFormat').addEventListener('click', () => {
+            testInterface.testToolFormat();
+        });
+
+        document.getElementById('runTestSuite').addEventListener('click', async () => {
+            const tests = [
+                { name: 'Delegation Test', fn: () => testInterface.testDelegation() },
+                { name: 'Calculation Test', fn: () => testInterface.testCalculation() },
+                { name: 'Loop Detection Test', fn: () => testInterface.testLoopDetection() },
+                { name: 'Tool Format Test', fn: () => testInterface.testToolFormat() }
+            ];
+
+            for (const test of tests) {
+                try {
+                    console.log(`Running ${test.name}...`);
+                    await test.fn();
+                    console.log(`${test.name} completed`);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait between tests
+                } catch (error) {
+                    console.error(`${test.name} failed:`, error);
+                }
+            }
+        });
+
+        // Initialize on load
+        window.addEventListener('load', () => {
+            testInterface.initialize();
+        });
+    </script>
+</body>
+</html>

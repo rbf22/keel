@@ -1,92 +1,254 @@
 import { LLMEngine } from "./llm";
-import { PERSONAS } from "./personas";
-import { storage } from "./storage";
 import { logger } from "./logger";
 import { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 import { PythonRuntime } from "./python-runtime";
-import { getSystemContext } from "./tools";
 import { skillsEngine } from "./skills/engine";
-import { SecureWebFetcher } from "./utils/secure-web-fetcher";
-import { AgentResponse, ToolCall, PendingPythonExecution, MemoryCategory, PythonOutput } from "./types";
+import { AgentResponse } from "./types";
 
 export class AgentOrchestrator {
-  private engine: LLMEngine;
+  // private engine: LLMEngine; // Currently unused in skill-based architecture
   private python: PythonRuntime;
   private chatHistory: ChatCompletionMessageParam[] = [];
   private maxLoops = 15;
-  private pendingToolCall: PendingPythonExecution | null = null;
-  private isExecutingPendingTool: boolean = false; // Track if we're currently executing a pending tool
+  private readonly maxChatHistoryLength = 50; // Prevent memory issues
   
-  // Hashing and loop detection config
-  private readonly stateHashContextLimit = 3; // Number of history messages to include in state hash
+  // Skill execution state
+  // private currentSkill: string | null = null; // Currently unused in skill-based architecture
+  private skillExecutionHistory: string[] = [];
+  private readonly maxSkillHistoryLength = 10;
   
-  // Enhanced loop detection state
-  private agentSequence: string[] = [];
-  private stateHashes: string[] = [];
-  private readonly maxSequenceLength = 10;
-  private readonly maxStateHashes = 20;
+  // Observer pattern state
+  // private lastExecutionResult: string = ""; // Currently unused in skill-based architecture
+  private needsDeepAnalysis: boolean = false;
 
-  constructor(engine: LLMEngine, python: PythonRuntime) {
-    this.engine = engine;
+  constructor(_engine: LLMEngine, python: PythonRuntime) {
+    // this.engine = engine; // Currently unused in skill-based architecture
     this.python = python;
   }
   
   /**
-   * Generate a hash of current state to detect repeating patterns
+   * Select appropriate skill for the task
    */
-  private async hashState(agentId: string, instruction: string): Promise<string> {
-    // Get last N messages from history for context
-    const recentContent = this.chatHistory.slice(-this.stateHashContextLimit).map(m => m.content).join('');
-    const stateString = `${agentId}|${instruction}|${recentContent}`;
+  private selectSkill(task: string): string {
+    const taskLower = task.toLowerCase();
     
-    // Use Web Crypto API for stronger hashing if available
-    if (crypto.subtle) {
-      try {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(stateString);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        return hashHex;
-      } catch (error) {
-        // Fallback to simple hash if crypto fails
-        logger.warn('orchestrator', 'Crypto hash failed, using fallback', { error });
-      }
+    // Priority-based skill selection
+    if (taskLower.includes('research') || taskLower.includes('find') || taskLower.includes('investigate')) {
+      return 'research';
+    }
+    if (taskLower.includes('data') || taskLower.includes('analyze') || taskLower.includes('statistics')) {
+      return 'data-analysis';
+    }
+    if (taskLower.includes('code') || taskLower.includes('program') || taskLower.includes('script')) {
+      return 'python-coding';
+    }
+    if (taskLower.includes('plan') || taskLower.includes('complex') || taskLower.includes('break down')) {
+      return 'task-planning';
     }
     
-    // Fallback to simple hash function
-    let hash = 0;
-    for (let i = 0; i < stateString.length; i++) {
-      const char = stateString.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    return hash.toString(16);
+    // Default to python-coding for general tasks
+    return 'python-coding';
   }
   
   /**
-   * Detect if we're in a repeating agent cycle
+   * Validate input parameters
    */
-  private detectAgentCycle(): boolean {
-    if (this.agentSequence.length < 6) return false; // Need at least some repetition
+  private validateInputs(userRequest: string, onUpdate: (response: AgentResponse) => void): void {
+    if (!userRequest || typeof userRequest !== 'string' || userRequest.trim().length === 0) {
+      throw new Error('User request must be a non-empty string');
+    }
+    if (typeof onUpdate !== 'function') {
+      throw new Error('onUpdate must be a function');
+    }
+  }
+
+  /**
+   * Truncate chat history to prevent memory issues
+   */
+  private truncateChatHistory(): void {
+    if (this.chatHistory.length > this.maxChatHistoryLength) {
+      const keepCount = Math.floor(this.maxChatHistoryLength / 2);
+      // Keep first message (user request) and recent messages
+      const firstMessage = this.chatHistory[0];
+      const recentMessages = this.chatHistory.slice(-keepCount);
+      this.chatHistory = [firstMessage, ...recentMessages];
+      logger.debug('orchestrator', 'Truncated chat history', { 
+        originalLength: this.chatHistory.length, 
+        truncatedLength: this.chatHistory.length 
+      });
+    }
+  }
+
+  /**
+   * Execute a skill with the given parameters
+   */
+  private async executeSkillMethod(skillName: string, params: Record<string, unknown>): Promise<string> {
+    // Validate inputs
+    if (!skillName || typeof skillName !== 'string') {
+      throw new Error('Skill name must be a non-empty string');
+    }
+    if (!params || typeof params !== 'object') {
+      throw new Error('Params must be a valid object');
+    }
+    if (!params.task || typeof params.task !== 'string') {
+      throw new Error('Task parameter must be a non-empty string');
+    }
     
-    // Try to find cycles of different lengths (2-4 agents)
+    logger.info('orchestrator', 'Executing skill', { skillName, paramCount: Object.keys(params).length });
+    
+    try {
+      const context = {
+        pythonRuntime: this.python,
+        userMessage: params.task as string,
+        conversationHistory: this.chatHistory.map(msg => ({ role: msg.role, content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) })),
+        timeout: 30000
+      };
+      
+      // Validate skill exists (if hasSkill method is available)
+      if (skillsEngine.hasSkill && !skillsEngine.hasSkill(skillName)) {
+        throw new Error(`Skill '${skillName}' not found`);
+      }
+      
+      const result = await skillsEngine.executeSkill(skillName, params, context);
+      
+      // Validate result
+      if (!result || typeof result !== 'object') {
+        throw new Error('Skill execution returned invalid result');
+      }
+      
+      // Store execution result for observer analysis
+      // this.lastExecutionResult = result?.output || ''; // Currently unused
+      
+      // Determine if deep analysis is needed
+      this.needsDeepAnalysis = !(result?.success === true) || 
+                             !!(result?.output && result.output.length > 1000) ||
+                             !!(result?.error && result.error.length > 100);
+      
+      if (result?.success) {
+        logger.info('orchestrator', 'Skill execution successful', { skillName, outputLength: result.output?.length || 0 });
+        return result.output || '';
+      } else {
+        logger.error('orchestrator', 'Skill execution failed', { skillName, error: result?.error });
+        return `Error: ${result?.error || 'Unknown error'}`;
+      }
+    } catch (error) {
+      logger.error('orchestrator', 'Skill execution threw exception', { skillName, error });
+      // Return user-friendly error instead of throwing
+      return `Skill execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  /**
+   * Perform built-in analysis of execution results
+   */
+  private async analyzeExecutionResult(skillName: string, result: string): Promise<string> {
+    logger.debug('orchestrator', 'Analyzing execution result', { skillName, resultLength: result.length });
+    
+    // Built-in lightweight analysis
+    const analysis = [];
+    
+    // Success assessment
+    if (result.toLowerCase().includes('error:') || result.toLowerCase().includes('error')) {
+      analysis.push('Execution failed with errors');
+    } else if (result.length < 10) {
+      analysis.push('Execution produced minimal output');
+    } else {
+      analysis.push('Execution completed successfully');
+    }
+    
+    // Quality assessment
+    if (result.length > 2000) {
+      analysis.push('Generated comprehensive output');
+    } else if (result.length > 500) {
+      analysis.push('Generated moderate output');
+    } else {
+      analysis.push('Generated concise output');
+    }
+    
+    // Next step recommendation
+    if (skillName === 'research' && !result.toLowerCase().includes('no information found')) {
+      analysis.push('Research successful - consider data analysis if needed');
+    } else if (skillName === 'data-analysis') {
+      analysis.push('Data analysis complete - review results or proceed with next step');
+    } else if (skillName === 'python-coding') {
+      analysis.push('Code executed - review output or run quality check');
+    }
+    
+    return analysis.join('. ');
+  }
+  
+  /**
+   * Perform deep analysis when needed
+   */
+  private async performDeepAnalysis(task: string, skillName: string, result: string): Promise<string> {
+    logger.info('orchestrator', 'Performing deep analysis', { skillName });
+    
+    const analysisParams = {
+      task,
+      skill_used: skillName,
+      result,
+      execution_data: {
+        duration: 0, // Could track this if needed
+        memory_usage: 0
+      }
+    };
+    
+    return await this.executeSkillMethod('execution-analyzer', analysisParams);
+  }
+  
+  /**
+   * Detect if we're in a repeating skill cycle
+   * Enhanced with context awareness to avoid false positives for legitimate workflows
+   */
+  private detectSkillCycle(): boolean {
+    if (this.skillExecutionHistory.length < 8) return false; // Need more history for better detection
+    
+    // Define legitimate workflow patterns that should not be considered cycles
+    const legitimatePatterns = [
+      ['research', 'data-analysis', 'python-coding', 'quality-review'],
+      ['task-planning', 'research', 'data-analysis', 'python-coding'],
+      ['python-coding', 'quality-review', 'python-coding'], // Code review iteration
+      ['research', 'python-coding', 'quality-review'] // Simplified workflow
+    ];
+    
+    // Try to find cycles of different lengths (2-4 skills)
     for (let cycleLength = 2; cycleLength <= 4; cycleLength++) {
-      if (this.agentSequence.length < cycleLength * 2) continue;
+      if (this.skillExecutionHistory.length < cycleLength * 3) continue; // Need at least 3 repetitions
       
-      // Get the last cycleLength agents
-      const recentIds = this.agentSequence.slice(-cycleLength);
+      const recentSkills = this.skillExecutionHistory.slice(-cycleLength);
       
-      // Look for this sequence earlier in the array
-      for (let i = 0; i <= this.agentSequence.length - (cycleLength * 2); i++) {
-        const candidateSequence = this.agentSequence.slice(i, i + cycleLength);
+      // Check if this matches any legitimate pattern
+      const isLegitimatePattern = legitimatePatterns.some(pattern => 
+        pattern.length === cycleLength && 
+        pattern.every((skill, index) => skill === recentSkills[index])
+      );
+      
+      if (isLegitimatePattern) {
+        // This is a legitimate workflow, not a cycle
+        continue;
+      }
+      
+      // Look for this sequence repeating at least 3 times (indicating a true cycle)
+      let repetitionCount = 0;
+      for (let i = 0; i <= this.skillExecutionHistory.length - cycleLength; i += cycleLength) {
+        const candidateSequence = this.skillExecutionHistory.slice(i, i + cycleLength);
         
-        // Check if sequences match exactly
-        if (candidateSequence.length === recentIds.length &&
-            candidateSequence.every((id, index) => id === recentIds[index])) {
-          // Found a matching sequence that's not overlapping
-          return true;
+        if (candidateSequence.length === recentSkills.length &&
+            candidateSequence.every((skill, index) => skill === recentSkills[index])) {
+          repetitionCount++;
+        } else {
+          break; // Pattern broken, reset count
         }
+      }
+      
+      // If we found 3+ repetitions of the same pattern, it's likely a cycle
+      if (repetitionCount >= 3) {
+        logger.warn('orchestrator', 'Detected legitimate skill cycle', {
+          cycleLength,
+          pattern: recentSkills.join(' -> '),
+          repetitions: repetitionCount
+        });
+        return true;
       }
     }
     
@@ -94,458 +256,243 @@ export class AgentOrchestrator {
   }
   
   /**
-   * Detect if we've seen this exact state before
-   */
-  private detectStateRepetition(currentHash: string): boolean {
-    return this.stateHashes.includes(currentHash);
-  }
-  
-  /**
    * Reset loop detection state (call when task completes or resets)
    */
   private resetLoopDetection(): void {
-    this.agentSequence = [];
-    this.stateHashes = [];
+    this.skillExecutionHistory = [];
   }
 
-  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, activePersonaIds: string[] = ["researcher", "coder", "reviewer", "observer"], signal?: AbortSignal) {
-    logger.info("orchestrator", "Starting complex task with tools", { 
+  async runTask(userRequest: string, onUpdate: (response: AgentResponse) => void, signal?: AbortSignal): Promise<ChatCompletionMessageParam[]> {
+    // Validate inputs
+    this.validateInputs(userRequest, onUpdate);
+    
+    logger.info("orchestrator", "Starting skill-based task execution", { 
       userRequest, 
-      activePersonaIds,
       requestLength: userRequest.length 
     });
     
-    // Reset loop detection state for fresh task
+    // Reset state for fresh task
     this.resetLoopDetection();
     this.chatHistory = [];
 
     let loopCount = 0;
     let taskComplete = false;
-    let lastAgentId = "";
+    let lastSkill = "";
     let noProgressCount = 0;
 
     logger.debug("orchestrator", "Adding user request to chat history", { userRequest });
     this.chatHistory.push({ role: "user", content: userRequest });
 
-    let nextAgentId = "manager";
-    let nextAgentInstruction = userRequest;
+    // Select initial skill
+    let currentSkill = this.selectSkill(userRequest);
+    let taskInstruction = userRequest;
 
     while (!taskComplete && loopCount < this.maxLoops) {
       if (signal?.aborted) {
         logger.info("orchestrator", "Task aborted by signal");
         throw new Error("Task aborted");
       }
+      
       loopCount++;
-      logger.info("orchestrator", `Loop ${loopCount} starting with agent: ${nextAgentId}`, {
+      // this.currentSkill = currentSkill; // Currently unused
+      
+      logger.info("orchestrator", `Loop ${loopCount} executing skill: ${currentSkill}`, {
         loopCount,
-        agentId: nextAgentId,
-        instructionLength: nextAgentInstruction.length,
+        skillName: currentSkill,
+        instructionLength: taskInstruction.length,
         maxLoops: this.maxLoops
       });
+
+      // Execute the current skill
+      onUpdate({ 
+        personaId: "system", 
+        content: `Executing skill: ${currentSkill}`,
+        type: undefined
+      });
+
+      const skillParams = { task: taskInstruction };
+      const result = await this.executeSkillMethod(currentSkill, skillParams);
       
-      // Handle reviewer code injection before state hashing
-      if (nextAgentId === "reviewer" && nextAgentInstruction.includes("Review the Python code")) {
-        logger.debug("orchestrator", "Injecting Python code context for reviewer");
-        // Find the last Python code block in chat history to provide better context
-        const lastCoderMessage = [...this.chatHistory].reverse().find(m => m.role === "assistant" && typeof m.content === 'string' && m.content.includes("```python"));
-        if (lastCoderMessage && typeof lastCoderMessage.content === 'string') {
-            logger.debug("orchestrator", "Found Python code block for reviewer context");
-            nextAgentInstruction += `\n\nCode to review:\n${lastCoderMessage.content}`;
-        } else {
-            logger.debug("orchestrator", "No Python code block found for reviewer context");
-        }
+      // Add result to chat history
+      this.chatHistory.push({ role: "assistant", content: result });
+      
+      // Truncate chat history to prevent memory issues
+      this.truncateChatHistory();
+      
+      // Perform built-in analysis
+      const analysis = await this.analyzeExecutionResult(currentSkill, result);
+      
+      // Perform deep analysis if needed
+      let deepAnalysis = "";
+      if (this.needsDeepAnalysis) {
+        deepAnalysis = await this.performDeepAnalysis(userRequest, currentSkill, result);
+      }
+      
+      // Update user with results
+      onUpdate({ 
+        personaId: currentSkill, 
+        content: result,
+        type: undefined
+      });
+      
+      onUpdate({ 
+        personaId: "observer", 
+        content: analysis,
+        type: undefined
+      });
+      
+      if (deepAnalysis) {
+        onUpdate({ 
+          personaId: "execution-analyzer", 
+          content: deepAnalysis,
+          type: undefined
+        });
       }
 
-      // Enhanced loop detection with state hashing and cycle detection
-      const currentStateHash = await this.hashState(nextAgentId, nextAgentInstruction);
-      
-      // Check for exact state repetition
-      if (this.detectStateRepetition(currentStateHash)) {
-        logger.warn("orchestrator", "Detected exact state repetition, terminating task", {
-          loopCount,
-          agentId: nextAgentId,
-          stateHash: currentStateHash
-        });
+      // Determine next step
+      if (result.toLowerCase().includes("finish") || result.toLowerCase().includes("task complete")) {
+        taskComplete = true;
+        logger.info("orchestrator", "Task completed successfully");
         onUpdate({ 
           personaId: "system", 
-          content: "Task appears to be repeating the same steps. Terminating to prevent infinite execution.", 
-          type: "error" 
+          content: "Task completed successfully.",
+          type: undefined
         });
         break;
       }
       
-      // Track state hash (with limit to prevent memory growth)
-      this.stateHashes.push(currentStateHash);
-      if (this.stateHashes.length > this.maxStateHashes) {
-        this.stateHashes.shift();
+      // Simple progression logic - can be enhanced with LLM
+      if (currentSkill === 'research' && !result.toLowerCase().includes('no information found')) {
+        currentSkill = 'data-analysis';
+        taskInstruction = `Analyze the research results: ${result}`;
+      } else if (currentSkill === 'data-analysis') {
+        currentSkill = 'python-coding';
+        taskInstruction = `Create code based on the analysis: ${result}`;
+      } else if (currentSkill === 'python-coding') {
+        currentSkill = 'quality-review';
+        taskInstruction = `Review the code execution: ${result}`;
+      } else if (currentSkill === 'quality-review') {
+        if (result.toLowerCase().includes('approved')) {
+          taskComplete = true;
+        } else {
+          currentSkill = 'python-coding';
+          taskInstruction = `Fix the code based on review: ${result}`;
+        }
+      } else if (currentSkill === 'task-planning') {
+        // After planning, proceed with research or coding based on plan
+        if (result.toLowerCase().includes('research') || result.toLowerCase().includes('investigate')) {
+          currentSkill = 'research';
+          taskInstruction = `Execute research phase of plan: ${result}`;
+        } else {
+          currentSkill = 'python-coding';
+          taskInstruction = `Execute coding phase of plan: ${result}`;
+        }
+      } else if (currentSkill === 'execution-analyzer') {
+        // After analysis, determine next step based on recommendations
+        if (result.toLowerCase().includes('continue') || result.toLowerCase().includes('proceed')) {
+          currentSkill = 'python-coding';
+          taskInstruction = `Continue with next step based on analysis: ${result}`;
+        } else if (result.toLowerCase().includes('research') || result.toLowerCase().includes('investigate')) {
+          currentSkill = 'research';
+          taskInstruction = `Research based on analysis recommendations: ${result}`;
+        } else {
+          // Analysis suggests completion or no clear next step
+          taskComplete = true;
+        }
+      } else {
+        // Default: try research again or finish
+        if (loopCount > 3) {
+          taskComplete = true;
+        } else {
+          currentSkill = 'research';
+          taskInstruction = `Continue research based on: ${result}`;
+        }
       }
       
-      // Track agent sequence
-      this.agentSequence.push(nextAgentId);
-      if (this.agentSequence.length > this.maxSequenceLength) {
-        this.agentSequence.shift();
+      // Track skill sequence
+      this.skillExecutionHistory.push(currentSkill);
+      if (this.skillExecutionHistory.length > this.maxSkillHistoryLength) {
+        this.skillExecutionHistory.shift();
       }
       
-      // Check for repeating agent cycles
-      if (this.detectAgentCycle()) {
-        logger.warn("orchestrator", "Detected repeating agent cycle, terminating task", {
+      // Check for repeating skill cycles
+      if (this.detectSkillCycle()) {
+        logger.warn("orchestrator", "Detected repeating skill cycle, terminating task", {
           loopCount,
-          sequence: this.agentSequence.slice(-4).join(' -> ')
+          sequence: this.skillExecutionHistory.slice(-4).join(' -> ')
         });
         onUpdate({ 
           personaId: "system", 
-          content: `Detected repeating agent pattern (${this.agentSequence.slice(-4).join(' -> ')}). Terminating to prevent infinite loop.`, 
-          type: "error" 
+          content: `Detected repeating skill pattern (${this.skillExecutionHistory.slice(-4).join(' -> ')}). Terminating to prevent infinite loop.`, 
+          type: undefined
         });
         break;
       }
       
-      // Legacy simple loop detection (kept for compatibility)
-      if (nextAgentId === lastAgentId) {
+      // Legacy simple loop detection
+      if (currentSkill === lastSkill) {
         noProgressCount++;
         if (noProgressCount > 3) {
           onUpdate({ 
             personaId: "system", 
-            content: "Task appears to be stuck with the same agent. Terminating to prevent infinite execution.", 
-            type: "error" 
+            content: "Task appears to be stuck with the same skill. Terminating to prevent infinite execution.", 
+            type: undefined
           });
           break;
         }
       } else {
         noProgressCount = 0;
-        lastAgentId = nextAgentId;
+        lastSkill = currentSkill;
       }
+    }
 
-      const persona = PERSONAS[nextAgentId];
-      logger.debug("orchestrator", "Retrieved persona for execution", { 
-        agentId: nextAgentId, 
-        personaName: persona.name,
-        personaId: persona.id 
+    if (loopCount >= this.maxLoops) {
+      logger.warn("orchestrator", "Task terminated due to maximum loops");
+      onUpdate({ 
+        personaId: "system", 
+        content: "Task terminated due to maximum loop limit.", 
+        type: undefined
       });
-      const personaPrompt = await getSystemContext(persona);
-      const taskPrompt = nextAgentId === "manager"
-        ? `Current User Request: "${userRequest}"
-Decide the next step. Use 'delegate' to call an agent, or 'FINISH' if complete.`
-        : `Your instruction: ${nextAgentInstruction}`;
-
-      // Add skills context to system prompt
-      const skillsContext = skillsEngine.getSkillsDescription();
-      const enhancedPersonaPrompt = personaPrompt + `\n\nAvailable Skills:\n${skillsContext}\n\nWhen you need to use a skill, format it as: <skill name="skillName">{"param": "value"}</skill>`;
-      
-      logger.debug("orchestrator", "Starting LLM generation for agent", { 
-        agentId: nextAgentId,
-        taskPromptLength: taskPrompt.length,
-        hasSystemOverride: !!enhancedPersonaPrompt
-      });
-      
-      let agentContent = "";
-      await this.engine.generate(taskPrompt, {
-        onToken: (text) => {
-          agentContent = text;
-          onUpdate({ personaId: nextAgentId, content: text });
-        },
-        history: this.chatHistory,
-        systemOverride: enhancedPersonaPrompt,
-        signal
-      });
-
-      logger.info("orchestrator", "Agent LLM generation completed", { 
-        agentId: nextAgentId,
-        responseLength: agentContent.length,
-        hasFinish: agentContent.includes("FINISH")
-      });
-      this.chatHistory.push({ role: "assistant", content: `[${persona.name}] ${agentContent}` });
-
-      if (agentContent.includes("FINISH") && nextAgentId === "manager") {
-        logger.info("orchestrator", "Task completed by manager agent", { 
-          loopCount,
-          agentId: nextAgentId 
-        });
-        taskComplete = true;
-        break;
-      }
-
-      // 3. Automated Observation & Tool Handling
-      const toolCall = this.parseToolCall(agentContent);
-      const skillCalls = skillsEngine.parseSkillCalls(agentContent);
-      logger.debug("orchestrator", "Parsed agent response for tools and skills", { 
-        agentId: nextAgentId,
-        hasToolCall: !!toolCall,
-        toolName: toolCall?.name,
-        skillCount: skillCalls.length,
-        skillNames: skillCalls.map(s => s.name)
-      });
-      let toolResult = "";
-      
-      // Handle skill calls
-      if (skillCalls.length > 0) {
-        logger.info("orchestrator", "Executing skill calls", { 
-          agentId: nextAgentId,
-          skillCount: skillCalls.length 
-        });
-        for (const skillCall of skillCalls) {
-          logger.debug("orchestrator", "Executing individual skill", { 
-            skillName: skillCall.name, 
-            skillParams: skillCall.params 
-          });
-          try {
-            const result = await skillsEngine.executeSkill(
-              skillCall.name, 
-              skillCall.params, 
-              { pythonRuntime: this.python }
-            );
-            
-            if (result.success) {
-              logger.info("orchestrator", "Skill execution succeeded", { 
-                skillName: skillCall.name, 
-                hasOutput: !!result.output 
-              });
-              toolResult += `Skill ${skillCall.name} executed successfully.\n`;
-              if (result.output) {
-                toolResult += `Output: ${result.output}\n`;
-              }
-            } else {
-              logger.error("orchestrator", "Skill execution failed", { 
-                skillName: skillCall.name, 
-                error: result.error 
-              });
-              toolResult += `Skill ${skillCall.name} failed: ${result.error}\n`;
-            }
-          } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            logger.error("orchestrator", "Skill execution threw error", { 
-              skillName: skillCall.name, 
-              error: errorMessage 
-            });
-            toolResult += `Error executing skill ${skillCall.name}: ${errorMessage}\n`;
-          }
-        }
-        logger.debug("orchestrator", "Adding skill execution result to chat history", { 
-          resultLength: toolResult.length 
-        });
-        this.chatHistory.push({ role: "assistant", content: `[System Observation] Skill execution result: ${toolResult}` });
-      }
-      
-      if (toolCall) {
-          logger.debug("orchestrator", "Processing tool call", { 
-            agentId: nextAgentId,
-            toolName: toolCall.name,
-            hasArgs: !!toolCall.args
-          });
-          
-          if (toolCall.name === "delegate") {
-              nextAgentId = toolCall.args.agent as string;
-              nextAgentInstruction = toolCall.args.instruction as string;
-              logger.info("orchestrator", "Delegating to agent", { 
-                targetAgent: nextAgentId,
-                instructionLength: nextAgentInstruction.length
-              });
-              toolResult = `Delegated to ${nextAgentId} with instructions: ${nextAgentInstruction}`;
-          } else if (toolCall.name === "execute_python" && nextAgentId !== "reviewer") {
-              // Intercept execute_python if it's not from a reviewer (usually coder)
-              // Force delegation to Reviewer first
-              logger.debug("orchestrator", "Intercepting Python execution for reviewer approval");
-              // Validate that this is a proper Python execution call
-              if (toolCall.name === "execute_python" && typeof toolCall.args?.code === "string") {
-                  // Check if we're already executing a pending tool to prevent reentrancy
-                  if (this.isExecutingPendingTool) {
-                      logger.warn("orchestrator", "Python execution rejected - already executing pending tool");
-                      toolResult = "Cannot execute Python code while another execution is in progress.";
-                      this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
-                  } else {
-                      this.pendingToolCall = toolCall as PendingPythonExecution;
-                      nextAgentId = "reviewer";
-                      nextAgentInstruction = `Review the Python code below and the planned execution. If it looks correct and safe, say "APPROVED" to allow execution. If not, provide fixes.\n\nCode:\n${toolCall.args.code}`;
-                      toolResult = `Execution pending. Delegated to Reviewer for approval.`;
-                      this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
-                  }
-              } else {
-                  toolResult = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
-                  this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
-              }
-          } else {
-              toolResult = await this.executeTool(toolCall.name, toolCall.args, onUpdate);
-              this.chatHistory.push({ role: "assistant", content: `[System Observation] Tool ${toolCall?.name} result: ${toolResult}` });
-          }
-      }
-
-      // Always run Observer after any agent action or tool call
-      logger.debug("orchestrator", "Starting observer analysis", { 
-        lastAgent: persona.name,
-        toolResultLength: toolResult.length 
-      });
-      const observer = PERSONAS["observer"];
-      const observerPrompt = await getSystemContext(observer);
-      const observerTask = `Analyze the last action by ${persona.name} and the tool result: ${toolResult}.
-Provide a concise observation for the Manager.`;
-
-      let observation = "";
-      await this.engine.generate(observerTask, {
-        onToken: (text) => {
-          observation = text;
-          onUpdate({ personaId: "observer", content: text, type: "observation" });
-        },
-        history: this.chatHistory,
-        systemOverride: observerPrompt,
-        signal
-      });
-      logger.info("orchestrator", "Observer analysis completed", { 
-        observationLength: observation.length 
-      });
-      this.chatHistory.push({ role: "assistant", content: `[Observer] ${observation}` });
-
-      // Post-agent logic (Reviewer automation, etc.)
-      // Always clear pending tool call when reviewer responds
-      if (persona.id === "reviewer") {
-          logger.debug("orchestrator", "Processing reviewer response", { 
-              hasPendingTool: !!this.pendingToolCall,
-              isExecutingPendingTool: this.isExecutingPendingTool,
-              approved: agentContent.includes("APPROVED")
-          });
-          
-          if (agentContent.includes("APPROVED") && this.pendingToolCall && !this.isExecutingPendingTool) {
-              // If Reviewer approves, execute the pending tool call
-              logger.info("orchestrator", "Reviewer approved Python execution, executing pending tool");
-              const currentPendingCall = this.pendingToolCall; // Capture before clearing
-              this.pendingToolCall = null; // Clear immediately to prevent re-execution
-              this.isExecutingPendingTool = true; // Set execution flag
-              
-              try {
-                  toolResult = await this.executeTool(currentPendingCall.name, currentPendingCall.args, onUpdate);
-                  logger.info("orchestrator", "Pending tool execution completed successfully");
-                  this.chatHistory.push({ role: "assistant", content: `[System Observation] Execution Result (Approved): ${toolResult}` });
-                  // After execution, return to manager
-                  nextAgentId = "manager";
-              } catch (e: unknown) {
-                  const errorMessage = e instanceof Error ? e.message : 'Unknown error';
-                  logger.error('orchestrator', 'Failed to execute pending tool call after approval', { error: errorMessage });
-                  toolResult = `Error executing approved code: ${errorMessage}`;
-                  this.chatHistory.push({ role: "assistant", content: `[System Observation] ${toolResult}` });
-              } finally {
-                  this.isExecutingPendingTool = false; // Clear execution flag
-              }
-          } else {
-              // Not approved, send back to coder
-              logger.info("orchestrator", "Reviewer rejected code, sending back to coder");
-              this.pendingToolCall = null; // Clear pending call
-              this.isExecutingPendingTool = false; // Clear execution flag if set
-              nextAgentId = "coder";
-              nextAgentInstruction = `The Reviewer found issues with your code. Please fix them:\n\n${agentContent}`;
-          }
-      } else if (nextAgentId === "coder" && !toolCall?.name?.includes("delegate") && !toolCall?.name?.includes("execute_python")) {
-          // If coder just finished and didn't delegate yet, we might want to force Reviewer
-          logger.debug("orchestrator", "Auto-delegating coder work to reviewer");
-          nextAgentId = "reviewer";
-          nextAgentInstruction = "Review the work written by the Coder.";
-      } else if (nextAgentId !== "manager" && !toolCall?.name) {
-          // If an agent finished without tool call, return to manager
-          logger.debug("orchestrator", "Agent finished without tool call, returning to manager", { 
-            agentId: nextAgentId 
-          });
-          nextAgentId = "manager";
-      } else if (toolCall?.name === "delegate" || (toolCall?.name === "execute_python" && persona.id === "coder")) {
-          // nextAgentId is already set above for delegation or intercepted execution
-          logger.debug("orchestrator", "Using pre-set next agent from tool call", { 
-            nextAgentId,
-            toolName: toolCall?.name
-          });
-      } else {
-          // Default back to manager to decide next step
-          logger.debug("orchestrator", "Defaulting to manager for next step");
-          nextAgentId = "manager";
-      }
     }
 
     logger.info("orchestrator", "Task execution completed", { 
-      finalLoopCount: loopCount,
-      chatHistoryLength: this.chatHistory.length,
-      taskComplete
+      loopCount, 
+      taskComplete,
+      skillsUsed: [...new Set(this.skillExecutionHistory)]
     });
+    
     return this.chatHistory;
   }
 
-  private parseToolCall(text: string): ToolCall | null {
-    const callMatch = text.match(/CALL:\s*(\w+)/);
-    const argsMatch = text.match(/ARGUMENTS:\s*(\{[\s\S]*?\})/);
-
-    if (callMatch && argsMatch) {
-        try {
-            const toolCall: ToolCall = {
-                name: callMatch[1],
-                args: JSON.parse(argsMatch[1]) as Record<string, unknown>
-            };
-            return toolCall;
-        } catch (e) {
-            logger.error("orchestrator", "Failed to parse tool arguments", { error: e, text: argsMatch[1] });
-        }
+  // Legacy methods for compatibility
+  async executeTool(toolName: string, args: Record<string, unknown>, _onUpdate: (response: AgentResponse) => void): Promise<string> {
+    // Map tool names to skills
+    const skillMapping: Record<string, string> = {
+      'web_fetch': 'research',
+      'execute_python': 'python-coding',
+      'vfs_write': 'python-coding',
+      'vfs_read': 'research',
+      'memory_update': 'execution-analyzer'
+    };
+    
+    const skillName = skillMapping[toolName] || 'python-coding';
+    
+    // Convert legacy tool parameters to skill task parameter
+    let task = '';
+    if (toolName === 'web_fetch' && args.url) {
+      task = `Fetch content from: ${args.url}`;
+    } else if (toolName === 'execute_python' && args.code) {
+      task = `Execute Python code: ${args.code}`;
+    } else if (toolName === 'vfs_write' && args.path && args.content) {
+      task = `Write to file ${args.path}: ${args.content}`;
+    } else if (toolName === 'vfs_read' && args.path) {
+      task = `Read file: ${args.path}`;
+    } else if (toolName === 'memory_update' && args.category && args.content) {
+      task = `Update memory ${args.category}: ${args.content}`;
+    } else {
+      task = `Execute ${toolName} with parameters: ${JSON.stringify(args)}`;
     }
-    return null;
-  }
-
-  private async executeTool(name: string, args: Record<string, unknown>, onUpdate: (response: AgentResponse) => void): Promise<string> {
-      logger.info("orchestrator", `Executing tool: ${name}`, args);
-      try {
-          switch (name) {
-              case "vfs_write":
-                  await storage.writeFile(args.path as string, args.content as string, args.l0 as string, args.l1 as string);
-                  return `Successfully wrote to ${args.path as string}`;
-              case "vfs_read":
-                  const content = await storage.readFile(args.path as string, args.level as "L0" | "L1" | "L2" | undefined);
-                  return content || "File not found.";
-              case "vfs_ls":
-                  const files = await storage.listFiles(args.prefix as string | undefined);
-                  return files.join(", ") || "No files found.";
-              case "memory_update":
-                  await storage.addMemory(args.category as MemoryCategory, args.content as string, args.tags as string[]);
-                  return "Memory updated.";
-              case "web_fetch":
-                  // Use secure web fetcher with security measures
-                  onUpdate({ personaId: "system", content: `Fetching ${args.url as string}...` });
-                  
-                  try {
-                      const content = await SecureWebFetcher.fetch(args.url as string, {
-                          timeout: 10000,
-                          maxSize: 5000,
-                          sanitizeContent: true
-                      });
-                      
-                      logger.info("orchestrator", `Successfully fetched via secure fetcher`, {
-                          url: args.url,
-                          contentLength: content.length
-                      });
-                      
-                      return content;
-                  } catch (error: unknown) {
-                      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                      logger.error('orchestrator', 'Secure web fetch failed', { error: errorMessage });
-                      return `Failed to fetch content: ${errorMessage}`;
-                  }
-              case "execute_python":
-                  let pyOutput = "";
-                  
-                  // Create a handler that captures output and sends updates
-                  const outputHandler = (out: PythonOutput) => {
-                      if (out.type === 'log' || out.type === 'error') {
-                          pyOutput += (out.message + "\n");
-                          onUpdate({ personaId: "python", content: out.message || "", type: out.type === 'error' ? 'error' : 'text' });
-                      }
-                  };
-                  
-                  // Push handler, execute, then restore
-                  this.python.onOutput = outputHandler;
-                  try {
-                      await this.python.execute(args.code as string);
-                  } finally {
-                      this.python.restoreHandler();
-                  }
-                  return pyOutput || "Code executed successfully.";
-              default:
-                  return `Unknown tool: ${name}`;
-          }
-      } catch (err: unknown) {
-          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-          logger.error('orchestrator', 'Tool execution failed', { error: errorMessage });
-          return `Error: ${errorMessage}`;
-      }
+    
+    return await this.executeSkillMethod(skillName, { task });
   }
 }
