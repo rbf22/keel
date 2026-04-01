@@ -1,6 +1,9 @@
 /// <reference lib="webworker" />
 import { ServiceWorkerMLCEngineHandler } from "@mlc-ai/web-llm";
 
+// Inject manifest for PWA
+(self as any).__WB_MANIFEST = [];
+
 let handler: ServiceWorkerMLCEngineHandler | null = null;
 
 // Cleanup function to prevent memory leaks

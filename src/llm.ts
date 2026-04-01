@@ -135,16 +135,23 @@ export const CUSTOM_MODEL_LIST: (webllm.ModelRecord & { recommended_config?: Mod
   {
     model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
     model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 376.06,
-    low_resource_required: true,
+    model_lib: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/SmolLM2-360M-Instruct-q4f16_1-MLC.wasm",
+    vram_required_MB: 0,
     required_features: ["shader-f16"],
-    overrides: {
-      context_window_size: 4096,
-    },
     recommended_config: {
       temperature: 0.7,
-      top_p: 0.95,
+      top_p: 0.9,
+    }
+  },
+  {
+    model_id: "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC", 
+    model: "https://huggingface.co/mlc-ai/TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC/resolve/main/",
+    model_lib: "https://huggingface.co/mlc-ai/TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC/resolve/main/TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC.wasm",
+    vram_required_MB: 0,
+    required_features: [],
+    recommended_config: {
+      temperature: 0.7,
+      top_p: 0.9,
     }
   },
   {
@@ -225,7 +232,7 @@ export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_MODEL_LIST.map(m => ({
   recommendedConfig: m.recommended_config,
 }));
 
-export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+export const DEFAULT_MODEL_ID = "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC";
 
 // Cache sorted model list for performance
 let sortedModelList: typeof CUSTOM_MODEL_LIST | null = null;
@@ -304,9 +311,128 @@ export class LocalLLMEngine implements ILLMEngine {
     logger.info("llm", `LocalLLMEngine initialized with Service Worker`);
   }
 
+  // Check if model is cached
+  async isModelCached(): Promise<boolean> {
+    try {
+      // Use WebLLM's built-in cache checking
+      const cacheKey = `web-llm-${this.modelId}`;
+      const cache = await caches.open(cacheKey);
+      const modelResponse = await cache.match(this.getModelUrl());
+      return modelResponse !== undefined;
+    } catch (error) {
+      logger.warn("llm", "Failed to check model cache", { error, modelId: this.modelId });
+      return false;
+    }
+  }
+
+  // Get cached model size
+  async getCachedModelSize(): Promise<number> {
+    try {
+      const cacheKey = `web-llm-${this.modelId}`;
+      const cache = await caches.open(cacheKey);
+      const keys = await cache.keys();
+      let totalSize = 0;
+      
+      for (const request of keys) {
+        const response = await cache.match(request);
+        if (response) {
+          const blob = await response.blob();
+          totalSize += blob.size;
+        }
+      }
+      
+      return totalSize;
+    } catch (error) {
+      logger.warn("llm", "Failed to get cached model size", { error, modelId: this.modelId });
+      return 0;
+    }
+  }
+
+  // Clear cached model
+  async clearCachedModel(): Promise<void> {
+    try {
+      const cacheKey = `web-llm-${this.modelId}`;
+      await caches.delete(cacheKey);
+      logger.info("llm", `Cleared cached model: ${this.modelId}`);
+    } catch (error) {
+      logger.error("llm", "Failed to clear cached model", { error, modelId: this.modelId });
+      throw error;
+    }
+  }
+
+  // Clear all cached models
+  static async clearAllCachedModels(): Promise<void> {
+    try {
+      const cacheNames = await caches.keys();
+      const webLLmCacheNames = cacheNames.filter(name => name.startsWith('web-llm-'));
+      
+      for (const cacheName of webLLmCacheNames) {
+        await caches.delete(cacheName);
+      }
+      
+      logger.info("llm", `Cleared ${webLLmCacheNames.length} cached model(s)`);
+    } catch (error) {
+      logger.error("llm", "Failed to clear all cached models", { error });
+      throw error;
+    }
+  }
+
+  // Get all cached models info
+  static async getAllCachedModels(): Promise<Array<{modelId: string, size: number}>> {
+    try {
+      const cacheNames = await caches.keys();
+      const webLLmCacheNames = cacheNames.filter(name => name.startsWith('web-llm-'));
+      const models = [];
+      
+      for (const cacheName of webLLmCacheNames) {
+        const modelId = cacheName.replace('web-llm-', '');
+        const cache = await caches.open(cacheName);
+        const keys = await cache.keys();
+        let totalSize = 0;
+        
+        for (const request of keys) {
+          const response = await cache.match(request);
+          if (response) {
+            const blob = await response.blob();
+            totalSize += blob.size;
+          }
+        }
+        
+        models.push({ modelId, size: totalSize });
+      }
+      
+      return models;
+    } catch (error) {
+      logger.error("llm", "Failed to get all cached models", { error });
+      return [];
+    }
+  }
+
+  private getModelUrl(): string {
+    const model = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
+    return model?.model_lib || '';
+  }
+
   async init() {
     this.onUpdate("Checking WebGPU...");
     await checkWebGPU();
+
+    // Check if model is already cached
+    const isCached = await this.isModelCached();
+    if (isCached) {
+      const cachedSize = await this.getCachedModelSize();
+      const sizeMB = (cachedSize / 1024 / 1024).toFixed(1);
+      this.onUpdate(`Loading ${this.modelId} from cache (${sizeMB}MB)...`);
+      logger.info("llm", `Model found in cache`, { 
+        modelId: this.modelId, 
+        cachedSizeMB: sizeMB 
+      });
+    } else {
+      this.onUpdate(`Downloading ${this.modelId} (first time - may take several minutes)...`);
+      logger.info("llm", `Model not cached, will download`, { 
+        modelId: this.modelId 
+      });
+    }
 
     const engineConfig: webllm.MLCEngineConfig = {
       appConfig: CUSTOM_APP_CONFIG,
@@ -323,28 +449,54 @@ export class LocalLLMEngine implements ILLMEngine {
   private async initServiceWorkerEngine(engineConfig: webllm.MLCEngineConfig) {
     this.onUpdate("Initializing Service Worker Engine...");
     
-    // Add timeout wrapper to prevent indefinite hanging, but allow sufficient time for model downloads
-    const ENGINE_INIT_TIMEOUT = 120000; // 2 minutes - increased for model downloads with caching
+    // Add timeout wrapper that resets on progress updates
+    const ENGINE_INIT_TIMEOUT = 600000; // 10 minutes - resets on progress
     
-    logger.info("llm", `Creating ServiceWorkerMLCEngine with ${ENGINE_INIT_TIMEOUT}ms timeout`, { 
+    logger.info("llm", `Creating ServiceWorkerMLCEngine with ${ENGINE_INIT_TIMEOUT}ms timeout (resets on progress)`, { 
       modelId: this.modelId 
     });
     
-    // Create timeout with cleanup capability
+    // Create timeout with reset capability
     let timeoutId: number | undefined;
+    let lastProgressTime = Date.now();
+    
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => {
-        logger.error("llm", "ServiceWorkerMLCEngine initialization timed out", { 
-          timeout: ENGINE_INIT_TIMEOUT,
-          modelId: this.modelId 
-        });
-        reject(new Error(`ServiceWorkerMLCEngine initialization timed out after ${ENGINE_INIT_TIMEOUT}ms. This may indicate:\n1. Network connectivity issues\n2. Model download problems\n3. Browser resource limits\n\nTry refreshing the page or check your internet connection.`));
-      }, ENGINE_INIT_TIMEOUT);
+      const resetTimeout = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        lastProgressTime = Date.now();
+        
+        timeoutId = setTimeout(() => {
+          const timeSinceLastProgress = Date.now() - lastProgressTime;
+          logger.error("llm", "ServiceWorkerMLCEngine initialization timed out", { 
+            timeout: ENGINE_INIT_TIMEOUT,
+            timeSinceLastProgress,
+            modelId: this.modelId 
+          });
+          reject(new Error(`ServiceWorkerMLCEngine initialization timed out after ${ENGINE_INIT_TIMEOUT}ms with no progress for ${timeSinceLastProgress}ms. This may indicate:\n1. Download stalled or network issues\n2. Browser resource limits or extensions blocking downloads\n3. CDN connectivity issues\n\nTry:\n- Check your internet connection speed\n- Disable browser extensions that might block large downloads\n- Refresh the page and try again\n- Consider using a smaller model if available`));
+        }, ENGINE_INIT_TIMEOUT);
+      };
+      
+      // Update progress callback to reset timeout
+      const originalProgressCallback = engineConfig.initProgressCallback;
+      engineConfig.initProgressCallback = (report: webllm.InitProgressReport) => {
+        // Reset timeout on each progress update
+        resetTimeout();
+        
+        // Call original callback
+        if (originalProgressCallback) {
+          originalProgressCallback(report);
+        }
+      };
+      
+      // Start initial timeout
+      resetTimeout();
     });
     
     // Create the engine using CreateServiceWorkerMLCEngine with timeout
     try {
-      this.onUpdate("Creating MLCEngine (this may take a moment for first-time downloads)...");
+      this.onUpdate("Creating MLCEngine (first-time download may take 5-10 minutes for 360MB model)...");
       this.engine = await Promise.race([
         webllm.CreateServiceWorkerMLCEngine(
           this.modelId,

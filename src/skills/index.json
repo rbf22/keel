@@ -3,6 +3,8 @@
   "description": "Keel Skills Index - Automatically generated list of available skills",
   "generated": "2026-04-01T01:27:41Z",
   "skills": [
+    "analyze-data",
+    "calculator",
     "data-analysis",
     "execution-analyzer",
     "python-coding",
