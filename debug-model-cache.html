@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IndexedDB Model Cache Debug</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #fff; padding: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #007AFF; }
+        .warning { color: #ffa500; }
+        button { padding: 10px; margin: 5px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:hover { background: #555; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <h1>IndexedDB Model Cache Debug Tool</h1>
+    
+    <div class="section">
+        <button onclick="runAllChecks()">🔍 Run All Debug Checks</button>
+        <button onclick="clearOutput()">🗑️ Clear Output</button>
+        <button onclick="checkWebLLMDatabases()">📊 Check WebLLM DBs Only</button>
+        <button onclick="checkKeelModels()">🔧 Check KeelModels DB</button>
+        <button onclick="simulateGetAllCachedModels()">🧪 Simulate getAllCachedModels</button>
+    </div>
+
+    <pre id="output"></pre>
+
+    <script>
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        async function checkStorageUsage() {
+            log("=== Storage Usage Check ===", 'info');
+            
+            if (navigator.storage && navigator.storage.estimate) {
+                try {
+                    const estimate = await navigator.storage.estimate();
+                    const usageMB = (estimate.usage / 1024 / 1024).toFixed(2);
+                    const quotaMB = (estimate.quota / 1024 / 1024).toFixed(2);
+                    const percent = ((estimate.usage / estimate.quota) * 100).toFixed(2);
+                    
+                    log(`Browser Storage Usage: ${usageMB} MB / ${quotaMB} MB (${percent}%)`, 'success');
+                    log(`Usage Details: ${JSON.stringify(estimate.usageDetails, null, 2)}`, 'info');
+                    log(`Quota Details: ${JSON.stringify(estimate.quotaDetails, null, 2)}`, 'info');
+                } catch (error) {
+                    log(`Storage estimate error: ${error.message}`, 'error');
+                }
+            } else {
+                log("Storage estimate not available", 'warning');
+            }
+        }
+
+        async function listAllDatabases() {
+            log("=== All IndexedDB Databases ===", 'info');
+            
+            try {
+                const databases = await indexedDB.databases();
+                log(`Found ${databases.length} databases:`, 'info');
+                
+                databases.forEach((db, i) => {
+                    log(`  ${i + 1}. Name: "${db.name}", Version: ${db.version}`, 'info');
+                });
+                
+                return databases;
+            } catch (error) {
+                log(`Failed to list databases: ${error.message}`, 'error');
+                return [];
+            }
+        }
+
+        async function examineDatabase(dbName) {
+            log(`\n--- Examining Database: ${dbName} ---`, 'info');
+            
+            return new Promise((resolve) => {
+                const request = indexedDB.open(dbName);
+                
+                request.onerror = () => {
+                    log(`❌ Failed to open ${dbName}: ${request.error?.message || 'Unknown error'}`, 'error');
+                    resolve();
+                };
+                
+                request.onsuccess = () => {
+                    const db = request.result;
+                    log(`✅ Opened successfully (version ${db.version})`, 'success');
+                    
+                    const storeNames = Array.from(db.objectStoreNames);
+                    log(`  Object Stores: ${storeNames.length} - ${storeNames.join(', ')}`, 'info');
+                    
+                    if (storeNames.length === 0) {
+                        log("  (No object stores found)", 'warning');
+                        db.close();
+                        resolve();
+                        return;
+                    }
+                    
+                    // Examine each store
+                    const storePromises = storeNames.map(storeName => examineObjectStore(db, storeName));
+                    Promise.all(storePromises).then(() => {
+                        db.close();
+                        resolve();
+                    });
+                };
+                
+                request.onupgradeneeded = () => {
+                    log(`⚠️ Database needs upgrade`, 'warning');
+                    resolve();
+                };
+            });
+        }
+
+        async function examineObjectStore(db, storeName) {
+            log(`    📁 Object Store: ${storeName}`, 'info');
+            
+            return new Promise((resolve) => {
+                try {
+                    const transaction = db.transaction([storeName], 'readonly');
+                    const store = transaction.objectStore(storeName);
+                    
+                    // List indexes
+                    const indexNames = Array.from(store.indexNames);
+                    if (indexNames.length > 0) {
+                        log(`      Indexes: ${indexNames.join(', ')}`, 'info');
+                        indexNames.forEach(indexName => {
+                            const index = store.index(indexName);
+                            log(`        - ${indexName} (keyPath: ${index.keyPath}, unique: ${index.unique})`, 'info');
+                        });
+                    } else {
+                        log(`      No indexes`, 'info');
+                    }
+                    
+                    // Count records
+                    const countRequest = store.count();
+                    countRequest.onsuccess = () => {
+                        const count = countRequest.result;
+                        log(`      Records: ${count}`, count > 0 ? 'success' : 'warning');
+                        
+                        if (count === 0) {
+                            resolve();
+                            return;
+                        }
+                        
+                        if (count <= 5) {
+                            // Show all records if small number
+                            const getAllRequest = store.getAll();
+                            getAllRequest.onsuccess = () => {
+                                const records = getAllRequest.result;
+                                records.forEach((record, i) => {
+                                    log(`      Record ${i + 1}: ${JSON.stringify(record, null, 6).substring(0, 200)}...`, 'info');
+                                });
+                                resolve();
+                            };
+                        } else {
+                            // Just show first record and total count for large stores
+                            const firstRequest = store.openCursor();
+                            firstRequest.onsuccess = () => {
+                                const cursor = firstRequest.result;
+                                if (cursor) {
+                                    log(`      First record: ${JSON.stringify(cursor.value, null, 4).substring(0, 300)}...`, 'info');
+                                }
+                                log(`      (and ${count - 1} more records)`, 'info');
+                                resolve();
+                            };
+                        }
+                    };
+                    
+                    countRequest.onerror = () => {
+                        log(`      ❌ Failed to count records: ${countRequest.error?.message}`, 'error');
+                        resolve();
+                    };
+                    
+                } catch (error) {
+                    log(`      ❌ Error examining store: ${error.message}`, 'error');
+                    resolve();
+                }
+            });
+        }
+
+        async function checkWebLLMDatabases() {
+            log("\n=== WebLLM Database Analysis ===", 'info');
+            
+            try {
+                const databases = await indexedDB.databases();
+                const webLLmDBs = databases.filter(db => db.name && db.name.startsWith('webllm:'));
+                
+                log(`Found ${webLLmDBs.length} WebLLM databases:`, webLLmDBs.length > 0 ? 'success' : 'warning');
+                
+                if (webLLmDBs.length === 0) {
+                    log("No WebLLM databases found - this might indicate no models are cached", 'warning');
+                    return;
+                }
+                
+                let totalSize = 0;
+                for (const dbInfo of webLLmDBs) {
+                    const modelId = dbInfo.name.replace('webllm:', '');
+                    log(`\n🤖 WebLLM Model: ${modelId}`, 'info');
+                    
+                    // Quick size estimate
+                    const size = await estimateDatabaseSize(dbInfo.name);
+                    totalSize += size;
+                    
+                    log(`  Estimated size: ${(size / 1024 / 1024).toFixed(2)} MB`, size > 0 ? 'success' : 'warning');
+                    
+                    // Examine structure
+                    await examineDatabase(dbInfo.name);
+                }
+                
+                log(`\n📊 Total WebLLM storage: ${(totalSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                
+            } catch (error) {
+                log(`Error checking WebLLM databases: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkKeelModels() {
+            log("\n=== KeelModels Database Analysis ===", 'info');
+            
+            return new Promise((resolve) => {
+                const request = indexedDB.open('KeelModels');
+                
+                request.onerror = () => {
+                    log(`❌ Failed to open KeelModels: ${request.error?.message}`, 'error');
+                    resolve();
+                };
+                
+                request.onsuccess = () => {
+                    const db = request.result;
+                    
+                    if (!db.objectStoreNames.contains('models')) {
+                        log("❌ No 'models' object store found in KeelModels", 'error');
+                        db.close();
+                        resolve();
+                        return;
+                    }
+                    
+                    log("✅ KeelModels database found", 'success');
+                    
+                    const transaction = db.transaction(['models'], 'readonly');
+                    const store = transaction.objectStore('models');
+                    
+                    const getAllRequest = store.getAll();
+                    getAllRequest.onsuccess = () => {
+                        const models = getAllRequest.result;
+                        log(`Found ${models.length} models in KeelModels:`, models.length > 0 ? 'success' : 'warning');
+                        
+                        if (models.length === 0) {
+                            log("No models found in KeelModels database", 'warning');
+                        } else {
+                            let totalSize = 0;
+                            models.forEach((model, i) => {
+                                log(`  Model ${i + 1}:`, 'info');
+                                log(`    ID: ${model.modelId}`, 'info');
+                                log(`    Size: ${(model.size / 1024 / 1024).toFixed(2)} MB`, 'info');
+                                log(`    Status: ${model.status}`, 'info');
+                                log(`    Download Date: ${model.downloadDate}`, 'info');
+                                log(`    Progress: ${model.progress || 'N/A'}`, 'info');
+                                totalSize += model.size || 0;
+                            });
+                            log(`Total KeelModels size: ${(totalSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                        }
+                        
+                        db.close();
+                        resolve();
+                    };
+                    
+                    getAllRequest.onerror = () => {
+                        log(`❌ Failed to get models: ${getAllRequest.error?.message}`, 'error');
+                        db.close();
+                        resolve();
+                    };
+                };
+            });
+        }
+
+        async function estimateDatabaseSize(dbName) {
+            return new Promise((resolve) => {
+                const request = indexedDB.open(dbName);
+                
+                request.onerror = () => resolve(0);
+                
+                request.onsuccess = () => {
+                    const db = request.result;
+                    const storeNames = Array.from(db.objectStoreNames);
+                    
+                    if (storeNames.length === 0) {
+                        db.close();
+                        resolve(0);
+                        return;
+                    }
+                    
+                    let totalSize = 0;
+                    let completed = 0;
+                    
+                    const checkStore = (storeName) => {
+                        return new Promise((storeResolve) => {
+                            try {
+                                const transaction = db.transaction([storeName], 'readonly');
+                                const store = transaction.objectStore(storeName);
+                                let storeSize = 0;
+                                let recordCount = 0;
+                                
+                                const cursorRequest = store.openCursor();
+                                cursorRequest.onsuccess = (event) => {
+                                    const cursor = event.target.result;
+                                    if (cursor && recordCount < 100) { // Limit to prevent hangs
+                                        storeSize += JSON.stringify(cursor.value).length * 2; // Rough estimate
+                                        recordCount++;
+                                        cursor.continue();
+                                    } else {
+                                        storeResolve(storeSize);
+                                    }
+                                };
+                                cursorRequest.onerror = () => storeResolve(0);
+                            } catch (e) {
+                                storeResolve(0);
+                            }
+                        });
+                    };
+                    
+                    Promise.all(storeNames.map(checkStore)).then((sizes) => {
+                        const total = sizes.reduce((sum, s) => sum + s, 0);
+                        db.close();
+                        resolve(total);
+                    });
+                };
+            });
+        }
+
+        async function simulateGetAllCachedModels() {
+            log("\n=== Simulating getAllCachedModels() ===", 'info');
+            
+            try {
+                if (typeof indexedDB === 'undefined') {
+                    log("IndexedDB not available", 'error');
+                    return [];
+                }
+                
+                const databases = await indexedDB.databases();
+                log(`Found ${databases.length} total databases`, 'info');
+                
+                const webLLmDBs = databases.filter(db => db.name && db.name.startsWith('webllm:'));
+                log(`Found ${webLLmDBs.length} WebLLM databases`, 'info');
+                
+                const models = [];
+                
+                for (const dbInfo of webLLmDBs) {
+                    const dbName = dbInfo.name;
+                    const modelId = dbName.replace('webllm:', '');
+                    
+                    log(`Processing model: ${modelId}`, 'info');
+                    
+                    const size = await estimateDatabaseSize(dbName);
+                    const isCorrupted = size > 0 && size < 1024 * 1024;
+                    const isEmpty = size === 0;
+                    
+                    log(`  Size: ${(size / 1024 / 1024).toFixed(2)} MB`, 'info');
+                    log(`  Is corrupted: ${isCorrupted}`, isCorrupted ? 'warning' : 'info');
+                    log(`  Is empty: ${isEmpty}`, isEmpty ? 'warning' : 'info');
+                    
+                    models.push({ modelId, size, isCorrupted, isEmpty });
+                }
+                
+                log(`\nFinal result: ${models.length} models`, 'success');
+                models.forEach((model, i) => {
+                    log(`  ${i + 1}. ${model.modelId} - ${(model.size / 1024 / 1024).toFixed(2)} MB`, 'info');
+                });
+                
+                return models;
+                
+            } catch (error) {
+                log(`Error in simulation: ${error.message}`, 'error');
+                return [];
+            }
+        }
+
+        async function runAllChecks() {
+            log("🚀 Starting comprehensive IndexedDB debug...", 'info');
+            
+            await checkStorageUsage();
+            const databases = await listAllDatabases();
+            
+            // Examine all databases
+            for (const db of databases) {
+                if (db.name) {
+                    await examineDatabase(db.name);
+                }
+            }
+            
+            await checkWebLLMDatabases();
+            await checkKeelModels();
+            await simulateGetAllCachedModels();
+            
+            log("\n✅ Debug completed!", 'success');
+        }
+
+        // Auto-run on page load
+        window.onload = () => {
+            log("IndexedDB Model Cache Debug Tool ready", 'success');
+            log("Click a button above to start debugging", 'info');
+        };
+    </script>
+</body>
+</html>

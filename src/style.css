@@ -13,6 +13,16 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+h1, h2, h3, h4, h5, h6 {
+  color: white;
+  margin: 0;
+  font-weight: normal;
+}
+
+h3 {
+  font-size: 0.9rem;
+}
+
 body {
   margin: 0;
   display: flex;
@@ -138,6 +148,25 @@ button {
   border-radius: 6px;
 }
 
+.header-button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  border: none;
+  background-color: #007aff;
+  color: white;
+  font-weight: normal;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  align-self: center;
+}
+
+.header-button:hover {
+  background-color: #0056b3;
+  color: white;
+}
+
 button:disabled {
   background-color: #444;
   cursor: not-allowed;
@@ -183,10 +212,16 @@ button:disabled {
   border-bottom: 2px solid transparent;
   color: #888;
   font-size: 0.8rem;
-  font-weight: bold;
+  font-weight: 500;
   cursor: pointer;
   border-radius: 0;
   position: relative;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .tab-btn.active {
@@ -231,32 +266,46 @@ button:disabled {
   gap: 0;
 }
 
-.python-header {
+/* Unified Header Styles */
+.python-header,
+.logs-header, 
+.context-header,
+.skills-header {
   padding: 0.5rem 1rem;
-  background: #222;
+  background: #1a1a1a;
   border-bottom: 1px solid #333;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 0;
+}
+
+.danger-button {
+  background-color: #dc3545 !important;
+}
+
+.danger-button:hover {
+  background-color: #c82333 !important;
+}
+
+.python-header {
+  margin-bottom: 0;
+}
+
+.logs-header, 
+.context-header {
+  margin-bottom: 0;
+}
+
+.skills-header {
+  margin-bottom: 0;
+  padding: 0.5rem 1rem;
 }
 
 .python-log-container {
   padding: 1rem;
   overflow-y: auto;
   flex: 1;
-}
-
-.logs-header, .context-header {
-  padding: 0.5rem 1rem;
-  background: #222;
-  border-bottom: 1px solid #333;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.context-header span {
-  color: white;
 }
 
 .logs-container, .context-container {
@@ -425,7 +474,7 @@ button:disabled {
   .settings-container h3,
   .settings-group label,
   .switch-label {
-    color: #213547;
+    color: white;
   }
   .settings-hint {
     color: #666;
@@ -437,25 +486,20 @@ button:disabled {
 }
 
 /* Skills Styles */
-.skills-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1rem;
-  padding: 0 1rem;
-}
-
 .skills-controls {
   display: flex;
   gap: 0.5rem;
 }
 
 .skills-controls input {
-  padding: 0.5rem;
+  padding: 0.3rem 0.5rem;
   border: 1px solid #444;
   border-radius: 4px;
   background: #333;
   color: #fff;
+  font-size: 0.8rem;
+  height: 24px;
+  box-sizing: border-box;
 }
 
 .skills-content {
@@ -583,21 +627,32 @@ pre {
   display: flex;
   gap: 0.5rem;
   margin-bottom: 1rem;
-  border-bottom: 1px solid #444;
+  border-bottom: 1px solid #333;
 }
 
 .subtab-btn {
-  background: none;
+  background: transparent;
   border: none;
-  padding: 0.5rem 1rem;
+  padding: 0.6rem 1rem;
   cursor: pointer;
   color: #888;
   border-bottom: 2px solid transparent;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: 0;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.subtab-btn:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .subtab-btn.active {
-  color: #000;
-  border-bottom-color: #1976d2;
+  color: #fff;
+  border-bottom-color: #007aff;
+  background: #2a2a2a;
 }
 
 .subtab-content {

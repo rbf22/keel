@@ -24,11 +24,22 @@ export class SettingsPanel {
     this.refreshModelsBtn = document.getElementById('refreshModelsBtn')! as HTMLButtonElement;
     this.clearAllModelsBtn = document.getElementById('clearAllModelsBtn')! as HTMLButtonElement;
 
+    console.log("🔍 SettingsPanel constructor - DOM elements found:", {
+      modelSelect: !!this.modelSelect,
+      storageUsage: !!this.storageUsage,
+      modelsList: !!this.modelsList,
+      refreshModelsBtn: !!this.refreshModelsBtn,
+      clearAllModelsBtn: !!this.clearAllModelsBtn
+    });
+
     this.init();
   }
 
   private async init() {
-    this.refreshModelsBtn.onclick = () => this.updateModelsDisplay();
+    this.refreshModelsBtn.onclick = () => {
+      console.log("🔄 Refresh button clicked");
+      this.updateModelsDisplay();
+    };
     this.clearAllModelsBtn.onclick = () => this.clearAllModels();
     
     // Also listen for change on the hidden/original select

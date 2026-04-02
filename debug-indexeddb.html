@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IndexedDB Debug</title>
+</head>
+<body>
+    <h1>IndexedDB Debug Tool</h1>
+    <button onclick="runDebug()">Run Debug Script</button>
+    <pre id="output"></pre>
+
+    <script>
+        // Debug script to examine IndexedDB databases and their indexes
+        function log(message) {
+            const output = document.getElementById('output');
+            output.textContent += message + '\n';
+        }
+
+        // Function to examine all databases
+        async function examineAllDatabases() {
+            log("\n1. Checking available databases:");
+            
+            // List all database names
+            const databases = await indexedDB.databases();
+            log("Available databases: " + JSON.stringify(databases, null, 2));
+            
+            for (const dbInfo of databases) {
+                if (dbInfo.name) {
+                    await examineDatabase(dbInfo.name);
+                }
+            }
+        }
+
+        // Function to examine a specific database
+        function examineDatabase(dbName) {
+            log(`\n=== Examining database: ${dbName} ===`);
+            
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName);
+                
+                request.onerror = () => {
+                    log(`Failed to open ${dbName}: ` + request.error);
+                    resolve();
+                };
+                
+                request.onsuccess = () => {
+                    const db = request.result;
+                    
+                    log(`Database version: ${db.version}`);
+                    log(`Object stores: ${Array.from(db.objectStoreNames).join(', ')}`);
+                    
+                    // Examine each object store
+                    const promises = [];
+                    for (const storeName of db.objectStoreNames) {
+                        promises.push(examineObjectStore(db, storeName));
+                    }
+                    
+                    Promise.all(promises).then(() => {
+                        db.close();
+                        resolve();
+                    });
+                };
+                
+                request.onupgradeneeded = () => {
+                    log(`Database ${dbName} needs upgrade`);
+                    resolve();
+                };
+            });
+        }
+
+        // Function to examine an object store and its indexes
+        function examineObjectStore(db, storeName) {
+            log(`\n--- Object Store: ${storeName} ---`);
+            
+            const transaction = db.transaction([storeName], 'readonly');
+            const store = transaction.objectStore(storeName);
+            
+            // Get all indexes
+            log("Indexes:");
+            for (const indexName of store.indexNames) {
+                const index = store.index(indexName);
+                log(`  - ${indexName} (keyPath: ${index.keyPath}, unique: ${index.unique})`);
+            }
+            
+            // Count records
+            const countRequest = store.count();
+            return new Promise(resolve => {
+                countRequest.onsuccess = () => {
+                    log(`Record count: ${countRequest.result}`);
+                    
+                    // Get first few records to see structure
+                    const getAllRequest = store.getAll();
+                    getAllRequest.onsuccess = () => {
+                        const records = getAllRequest.result;
+                        log(`Sample records (first 3):`);
+                        records.slice(0, 3).forEach((record, i) => {
+                            log(`  Record ${i + 1}: ` + JSON.stringify(record, null, 2));
+                        });
+                        
+                        if (records.length > 3) {
+                            log(`  ... and ${records.length - 3} more records`);
+                        }
+                        
+                        resolve();
+                    };
+                };
+            });
+        }
+
+        // Function to check storage usage
+        async function checkStorageUsage() {
+            log("\n=== Storage Usage ===");
+            
+            const nav = navigator;
+            if (nav.storage && nav.storage.estimate) {
+                const estimate = await nav.storage.estimate();
+                log("Storage estimate: " + JSON.stringify({
+                    usage: estimate.usage,
+                    quota: estimate.quota,
+                    usageDetails: estimate.usageDetails,
+                    quotaDetails: estimate.quotaDetails
+                }, null, 2));
+                
+                if (estimate.usage && estimate.quota) {
+                    const usagePercent = (estimate.usage / estimate.quota * 100).toFixed(2);
+                    log(`Usage: ${usagePercent}% (${(estimate.usage / 1024 / 1024).toFixed(2)} MB / ${(estimate.quota / 1024 / 1024).toFixed(2)} MB)`);
+                }
+            } else {
+                log("Storage estimate not available");
+            }
+        }
+
+        // Function to specifically check model storage
+        function checkModelStorage() {
+            log("\n=== Model Storage Specific Check ===");
+            
+            return new Promise((resolve) => {
+                const request = indexedDB.open('KeelModels');
+                
+                request.onerror = () => {
+                    log("Failed to open KeelModels: " + request.error);
+                    resolve();
+                };
+                
+                request.onsuccess = () => {
+                    const db = request.result;
+                    
+                    if (!db.objectStoreNames.contains('models')) {
+                        log("No 'models' object store found in KeelModels");
+                        db.close();
+                        resolve();
+                        return;
+                    }
+                    
+                    const transaction = db.transaction(['models'], 'readonly');
+                    const store = transaction.objectStore('models');
+                    
+                    // Check all models
+                    const getAllRequest = store.getAll();
+                    getAllRequest.onsuccess = () => {
+                        const models = getAllRequest.result;
+                        log(`Found ${models.length} models in KeelModels:`);
+                        
+                        models.forEach((model, i) => {
+                            log(`  Model ${i + 1}: ` + JSON.stringify({
+                                modelId: model.modelId,
+                                size: model.size,
+                                status: model.status,
+                                downloadDate: model.downloadDate,
+                                progress: model.progress
+                            }, null, 2));
+                        });
+                        
+                        // Calculate total size
+                        const totalSize = models.reduce((sum, model) => sum + (model.size || 0), 0);
+                        log(`Total model size: ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+                        
+                        db.close();
+                        resolve();
+                    };
+                    
+                    getAllRequest.onerror = () => {
+                        log("Failed to get models: " + getAllRequest.error);
+                        db.close();
+                        resolve();
+                    };
+                };
+            });
+        }
+
+        // Run all checks
+        async function runDebug() {
+            document.getElementById('output').textContent = '=== IndexedDB Debug Script ===';
+            
+            try {
+                await checkStorageUsage();
+                await examineAllDatabases();
+                await checkModelStorage();
+                log("\n=== Debug script completed ===");
+            } catch (error) {
+                log("Debug script error: " + error);
+            }
+        }
+    </script>
+</body>
+</html>

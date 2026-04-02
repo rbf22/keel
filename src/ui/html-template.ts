@@ -33,8 +33,8 @@ export const HTML_TEMPLATE = `
 
         <div class="output-content" id="contextTab" data-tab-content="context" style="display: none;">
           <div class="context-header">
-            <span>Keel Virtual Filesystem (keel://)</span>
-            <button id="refreshContextBtn">Refresh List</button>
+            <h3>Keel Virtual Filesystem (keel://)</h3>
+            <button id="refreshContextBtn" class="header-button">Refresh List</button>
           </div>
           <div id="vfsContainer" class="context-container">
             <div class="output-log">Context not initialized.</div>
@@ -44,7 +44,7 @@ export const HTML_TEMPLATE = `
         <div class="output-content" id="pythonOutputTab" data-tab-content="python" style="display: none;">
           <div class="python-header">
             <h3>Python Output</h3>
-            <button id="clearPythonBtn" class="button small-button">Clear</button>
+            <button id="clearPythonBtn" class="header-button">Clear</button>
           </div>
           <div id="pythonLogContainer" class="python-log-container">
             <div class="output-log">Python runtime not initialized.</div>
@@ -56,8 +56,8 @@ export const HTML_TEMPLATE = `
             <h3>Skills</h3>
             <div class="skills-controls">
               <input type="text" id="skillSearchInput" placeholder="Search skills..." />
-              <button id="installSkillBtn">Install Skill</button>
-              <button id="refreshSkillsBtn">Refresh</button>
+              <button id="installSkillBtn" class="header-button">Install Skill</button>
+              <button id="refreshSkillsBtn" class="header-button">Refresh</button>
             </div>
           </div>
           <div class="skills-content">
@@ -74,21 +74,19 @@ export const HTML_TEMPLATE = `
 
         <div class="output-content" id="settingsTab" data-tab-content="models" style="display: none;">
           <div class="settings-container">
-            <h3>Model Configuration & Cache</h3>
+            <div class="python-header">
+              <h3>Model Configuration & Cache</h3>
+              <div class="skills-controls">
+                <button id="refreshModelsBtn" class="header-button">Refresh List</button>
+                <button id="clearAllModelsBtn" class="header-button danger-button">Clear All Models</button>
+              </div>
+            </div>
             <div id="modelsUnifiedContent" class="models-unified-content">
 
               <hr style="border: 0; border-top: 1px solid #333; margin: 1.5rem 0;">
 
               <!-- Cache Management Section -->
               <div class="settings-section">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                  <h4 style="margin: 0;">Model Cache</h4>
-                  <div style="display: flex; gap: 0.5rem;">
-                    <button id="refreshModelsBtn" class="button small-button">Refresh List</button>
-                    <button id="clearAllModelsBtn" class="button small-button danger-button">Clear All Models</button>
-                  </div>
-                </div>
-                
                 <div class="settings-group">
                   <label>Storage Usage</label>
                   <div id="storageUsage" class="storage-usage-panel">
@@ -107,7 +105,7 @@ export const HTML_TEMPLATE = `
         <div class="output-content" id="logsTab" data-tab-content="logs" style="display: none;">
           <div class="logs-header">
             <h3>System Logs</h3>
-            <button id="copyLogsBtn" class="button">Copy Logs</button>
+            <button id="copyLogsBtn" class="header-button">Copy Logs</button>
           </div>
           <div id="logsContainer" class="logs-container">
             <div class="output-log">No logs yet.</div>
