@@ -17,13 +17,13 @@ export class UI {
     onSendMessage: (text: string) => void,
     onStopTask: () => void,
     onInitRequested: (modelId: string) => void,
-    onSettingsChanged: (apiKey: string, enabled: boolean) => void
+    onModelSelected?: (modelId: string) => void
   ) {
     this.chat = new ChatPanel(onSendMessage, onStopTask, onInitRequested);
     this.logs = new LogPanel();
     this.status = new StatusBar();
     this.vfs = new VFSPanel();
-    this.settings = new SettingsPanel(onSettingsChanged, (modelId: string) => {
+    this.settings = new SettingsPanel((modelId: string) => {
       // Sync model selection to chat panel when changed in settings
       if (this.chat) {
         // Update the model select in chat panel

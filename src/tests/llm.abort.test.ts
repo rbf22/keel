@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { LocalLLMEngine, OnlineLLMEngine, HybridLLMEngine } from '../llm'
+import { LocalLLMEngine } from '../llm'
 import * as webllm from "@mlc-ai/web-llm"
 import { logger } from "../logger"
 
@@ -92,88 +92,6 @@ describe('LLM Abort Support', () => {
 
       expect(onToken).toHaveBeenCalledWith('hello')
       expect(onToken).not.toHaveBeenCalledWith('hello world')
-    })
-  })
-
-  describe('OnlineLLMEngine', () => {
-    let engine: OnlineLLMEngine
-
-    beforeEach(() => {
-      engine = new OnlineLLMEngine('test-api-key')
-      // Mock global fetch
-      vi.stubGlobal('fetch', vi.fn())
-    })
-
-    it('should abort online generation when signal is already aborted', async () => {
-      const controller = new AbortController()
-      controller.abort()
-
-      await expect(engine.generate('test prompt', {
-        onToken: vi.fn(),
-        signal: controller.signal
-      })).rejects.toThrow('Generation aborted')
-      
-      expect(fetch).not.toHaveBeenCalled()
-    })
-
-    it('should pass signal to fetch in online engine', async () => {
-      const controller = new AbortController()
-      
-      const mockResponse = {
-        ok: true,
-        body: {
-          getReader: vi.fn().mockReturnValue({
-            read: vi.fn().mockResolvedValue({ done: true })
-          })
-        }
-      }
-      ;(fetch as any).mockResolvedValue(mockResponse)
-
-      await engine.generate('test prompt', {
-        onToken: vi.fn(),
-        signal: controller.signal
-      })
-
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('generativelanguage.googleapis.com'),
-        expect.objectContaining({
-          signal: controller.signal
-        })
-      )
-    })
-  })
-
-  describe('HybridLLMEngine', () => {
-    let hybrid: HybridLLMEngine
-    let mockLocal: any
-    let mockOnline: any
-
-    beforeEach(() => {
-      mockLocal = {
-        generate: vi.fn(),
-        init: vi.fn()
-      }
-      mockOnline = {
-        generate: vi.fn(),
-        init: vi.fn()
-      }
-      hybrid = new HybridLLMEngine(mockLocal)
-      ;(hybrid as any).onlineEngine = mockOnline
-      ;(hybrid as any).useOnline = true
-    })
-
-    it('should NOT fallback to local if online engine fails due to abort', async () => {
-      const controller = new AbortController()
-      const error = new Error('Generation aborted')
-      mockOnline.generate.mockRejectedValue(error)
-      controller.abort()
-
-      await expect(hybrid.generate('test prompt', {
-        onToken: vi.fn(),
-        signal: controller.signal
-      })).rejects.toThrow('Generation aborted')
-
-      expect(mockLocal.generate).not.toHaveBeenCalled()
     })
   })
 })

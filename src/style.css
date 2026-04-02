@@ -482,11 +482,19 @@ button:disabled {
   border-radius: 8px;
   margin-bottom: 0.5rem;
   cursor: pointer;
-  transition: background-color 0.2s;
 }
 
-.skill-item:hover {
-  background: #333;
+.skill-item.inactive {
+  opacity: 0.6;
+  background: #222;
+}
+
+.skill-item.inactive h4 {
+  color: #888;
+}
+
+.skill-item.inactive p {
+  color: #666;
 }
 
 .skill-header {
@@ -512,6 +520,20 @@ button:disabled {
 
 .skill-uninstall-btn:hover {
   background: #f44336;
+}
+
+.skill-toggle-btn {
+  background: #2196F3;
+  color: white;
+  border: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.skill-toggle-btn:hover {
+  background: #1976D2;
 }
 
 .skill-tags {

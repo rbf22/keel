@@ -1,46 +1,33 @@
 import { logger } from "../logger";
 import { SUPPORTED_MODELS } from "../llm";
 import { LocalLLMEngine } from "../llm";
+import { onDownloadComplete } from "../llm/cache";
 
 export class SettingsPanel {
   private modelSelect: HTMLSelectElement;
-  private geminiApiKeyInput: HTMLInputElement;
-  private onlineModeToggle: HTMLInputElement;
   private storageUsage: HTMLElement;
   private modelsList: HTMLElement;
   private refreshModelsBtn: HTMLButtonElement;
   private clearAllModelsBtn: HTMLButtonElement;
 
-  private testApiBtn: HTMLButtonElement;
-  private apiTestStatus: HTMLElement;
-  private onSettingsChanged: (apiKey: string, enabled: boolean) => void;
   private onModelSelected?: (modelId: string) => void;
   private refreshInterval: any = null;
 
   constructor(
-    onSettingsChanged: (apiKey: string, enabled: boolean) => void,
     onModelSelected?: (modelId: string) => void
   ) {
+    this.onModelSelected = onModelSelected;
+    
     this.modelSelect = document.getElementById('modelSelect')! as HTMLSelectElement;
-    this.geminiApiKeyInput = document.getElementById('geminiApiKey')! as HTMLInputElement;
-    this.onlineModeToggle = document.getElementById('onlineModeToggle')! as HTMLInputElement;
-    this.testApiBtn = document.getElementById('testApiBtn')! as HTMLButtonElement;
-    this.apiTestStatus = document.getElementById('apiTestStatus')!;
     this.storageUsage = document.getElementById('storageUsage')!;
     this.modelsList = document.getElementById('modelsList')!;
     this.refreshModelsBtn = document.getElementById('refreshModelsBtn')! as HTMLButtonElement;
     this.clearAllModelsBtn = document.getElementById('clearAllModelsBtn')! as HTMLButtonElement;
 
-    this.onSettingsChanged = onSettingsChanged;
-    this.onModelSelected = onModelSelected;
-
     this.init();
   }
 
   private async init() {
-    this.geminiApiKeyInput.oninput = () => this.autoSaveSettings();
-    this.onlineModeToggle.onchange = () => this.autoSaveSettings();
-    this.testApiBtn.onclick = () => this.testApiConnection();
     this.refreshModelsBtn.onclick = () => this.updateModelsDisplay();
     this.clearAllModelsBtn.onclick = () => this.clearAllModels();
     
@@ -50,75 +37,25 @@ export class SettingsPanel {
       if (this.onModelSelected) this.onModelSelected(this.modelSelect.value);
       void this.updateModelsDisplay();
     };
+    
+    // Register callback for when downloads complete
+    onDownloadComplete(() => {
+      void this.updateModelsDisplay();
+      void this.updateModelSelectWithCacheStatus();
+    });
 
     await this.loadSettings();
     await this.updateModelsDisplay();
   }
 
-  private autoSaveSettings() {
-    const apiKey = this.geminiApiKeyInput.value.trim();
-    const enabled = this.onlineModeToggle.checked;
-
-    localStorage.setItem('geminiApiKey', apiKey);
-    localStorage.setItem('onlineModeEnabled', String(enabled));
-
-    this.onSettingsChanged(apiKey, enabled);
-  }
-
-  private async testApiConnection() {
-    const apiKey = this.geminiApiKeyInput.value.trim();
-    if (!apiKey) {
-      this.apiTestStatus.textContent = "❌ Enter an API key first";
-      this.apiTestStatus.className = "error";
-      return;
-    }
-
-    this.testApiBtn.disabled = true;
-    this.apiTestStatus.textContent = "⌛ Testing...";
-    this.apiTestStatus.className = "loading";
-
-    try {
-      // Direct call to Gemini endpoint for testing
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key=${apiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "gemini-1.5-flash",
-          messages: [{ role: "user", content: "Say 'Success' briefly." }],
-          max_tokens: 10
-        })
-      });
-
-      if (response.ok) {
-        this.apiTestStatus.textContent = "✅ Connection successful!";
-        this.apiTestStatus.className = "success";
-      } else {
-        const err = await response.json();
-        this.apiTestStatus.textContent = `❌ Failed: ${err.error?.message || response.statusText}`;
-        this.apiTestStatus.className = "error";
-      }
-    } catch (error) {
-      this.apiTestStatus.textContent = `❌ Error: ${error instanceof Error ? error.message : String(error)}`;
-      this.apiTestStatus.className = "error";
-    } finally {
-      this.testApiBtn.disabled = false;
-    }
-  }
-
   private async loadSettings() {
-    // We always start with "Select model..." even if there is a saved model
-    this.modelSelect.value = "";
+    // Load saved model selection
+    const savedModelId = localStorage.getItem('selectedModelId');
+    if (savedModelId) {
+      this.modelSelect.value = savedModelId;
+    }
     
     await this.updateModelSelectWithCacheStatus();
-
-    const savedApiKey = localStorage.getItem('geminiApiKey');
-    if (savedApiKey) this.geminiApiKeyInput.value = savedApiKey;
-
-    const savedOnlineMode = localStorage.getItem('onlineModeEnabled') === 'true';
-    this.onlineModeToggle.checked = savedOnlineMode;
-    
-    // Initial callback
-    this.onSettingsChanged(this.geminiApiKeyInput.value.trim(), this.onlineModeToggle.checked);
   }
 
   async updateModelSelectWithCacheStatus() {
@@ -144,8 +81,21 @@ export class SettingsPanel {
   }
 
   async updateModelsDisplay() {
+    console.log("🔄 updateModelsDisplay called");
     try {
       const models = await LocalLLMEngine.getAllCachedModels();
+      console.log("📊 Got models:", models.length, models);
+      logger.debug("main", "Received models from engine", { 
+        count: models.length,
+        models: models.map(m => ({ 
+          modelId: m.modelId, 
+          sizeMB: (m.size / 1024 / 1024).toFixed(2),
+          isCorrupted: m.isCorrupted,
+          isEmpty: m.isEmpty,
+          isDownloading: (m as any).isDownloading 
+        }))
+      });
+      
       const totalModelsSize = models.reduce((sum, model) => sum + (model.size > 0 ? model.size : 0), 0);
       const totalModelsSizeMB = (totalModelsSize / 1024 / 1024).toFixed(1);
       

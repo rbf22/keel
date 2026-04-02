@@ -76,26 +76,6 @@ export const HTML_TEMPLATE = `
           <div class="settings-container">
             <h3>Model Configuration & Cache</h3>
             <div id="modelsUnifiedContent" class="models-unified-content">
-              <!-- API Configuration Section -->
-              <div class="settings-section">
-                <h4>API Configuration</h4>
-                <div class="settings-group">
-                  <label for="geminiApiKey">Google Gemini API Key</label>
-                  <input type="password" id="geminiApiKey" placeholder="Enter your API key...">
-                  <p class="settings-hint">Auto-saves to browser storage.</p>
-                </div>
-                <div class="settings-group">
-                  <label class="toggle-container">
-                    <input type="checkbox" id="onlineModeToggle">
-                    <span class="toggle-label">Enable Online Mode (Gemini 2.0 Flash)</span>
-                  </label>
-                  <p class="settings-hint">When enabled, Keel will use Gemini 2.0 Flash for complex tasks if an API key is provided.</p>
-                </div>
-                <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
-                  <button id="testApiBtn" class="button small-button">Test API Connection</button>
-                  <span id="apiTestStatus" style="font-size: 0.75rem;"></span>
-                </div>
-              </div>
 
               <hr style="border: 0; border-top: 1px solid #333; margin: 1.5rem 0;">
 

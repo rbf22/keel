@@ -23,6 +23,7 @@ import { SKILL_FILES, SCRIPT_FILES, REFERENCE_FILES } from './discovery'
 export class SkillsEngine {
   private skillMetadata = new Map<string, SkillMetadata>()
   private loadedSkills = new Map<string, ParsedSkill>()
+  private activeSkills = new Set<string>()
   private initialized = false
   private readonly MAX_LOADED_SKILLS = 50
   private loadedSkillsOrder: string[] = []
@@ -68,6 +69,9 @@ export class SkillsEngine {
       totalMetadataLoaded: this.skillMetadata.size,
       totalFailed: failedSkills.length
     })
+    
+    // Activate all skills by default for backward compatibility
+    this.activateAllSkills()
   }
   
   // Register built-in skills (loads from filesystem only)
@@ -137,6 +141,8 @@ export class SkillsEngine {
       metadata: skill.metadata
     })
     this.addToLoadedSkills(skill.name, skill)
+    // Activate new skills by default
+    this.activeSkills.add(skill.name)
   }
 
   private addToLoadedSkills(name: string, skill: ParsedSkill): void {
@@ -157,7 +163,41 @@ export class SkillsEngine {
   
   // Get all available skills (metadata only for Level 1 disclosure)
   getAvailableSkillsMetadata(): SkillMetadata[] {
+    return Array.from(this.skillMetadata.values()).filter(skill => 
+      this.activeSkills.has(skill.name)
+    )
+  }
+
+  // Get all skills (including inactive ones)
+  getAllSkillsMetadata(): SkillMetadata[] {
     return Array.from(this.skillMetadata.values())
+  }
+
+  // Toggle skill active state
+  toggleSkill(skillName: string): boolean {
+    if (!this.skillMetadata.has(skillName)) {
+      throw new Error(`Skill "${skillName}" not found`)
+    }
+    
+    if (this.activeSkills.has(skillName)) {
+      this.activeSkills.delete(skillName)
+      return false // Deactivated
+    } else {
+      this.activeSkills.add(skillName)
+      return true // Activated
+    }
+  }
+
+  // Check if skill is active
+  isSkillActive(skillName: string): boolean {
+    return this.activeSkills.has(skillName)
+  }
+
+  // Activate all skills by default (for backward compatibility)
+  private activateAllSkills(): void {
+    this.skillMetadata.forEach((_, skillName) => {
+      this.activeSkills.add(skillName)
+    })
   }
 
   // Get full skill (loads from storage if needed - Level 2 disclosure)
@@ -406,6 +446,7 @@ ${mainScript}
   async uninstallSkill(skillName: string): Promise<void> {
     this.skillMetadata.delete(skillName)
     this.loadedSkills.delete(skillName)
+    this.activeSkills.delete(skillName)
     this.loadedSkillsOrder = this.loadedSkillsOrder.filter(n => n !== skillName)
     await skillStorage.deleteSkill(skillName)
   }

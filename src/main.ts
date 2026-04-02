@@ -1,5 +1,5 @@
 import './style.css'
-import { HybridLLMEngine, LocalLLMEngine } from './llm'
+import { LocalLLMEngine } from './llm'
 import { PythonRuntime } from './python-runtime'
 import { PythonOutput, AgentResponse } from './types'
 import { logger } from './logger'
@@ -12,11 +12,17 @@ import { UI } from './ui'
 
 // Global state
 let python: PythonRuntime | null = null;
-let engine: HybridLLMEngine | null = null;
+let engine: LocalLLMEngine | null = null;
 let currentTaskId = 0;
 let currentAbortController: AbortController | null = null;
 let environmentInitialized = false;
 let environmentInitializing = false;
+
+// Model selection handler
+function handleModelSelected(modelId: string) {
+  logger.info('main', `Model selected: ${modelId}`);
+  // Model selection is handled by the settings panel
+}
 
 // Initialize UI
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -26,9 +32,7 @@ const ui = new UI(
   (text) => handleSend(text),
   () => stopTask(),
   (modelId) => handleInitModel(modelId),
-  (apiKey, enabled) => {
-    if (engine) engine.setOnlineConfig(apiKey, enabled);
-  }
+  (modelId) => handleModelSelected(modelId)
 );
 
 // Python output handler
@@ -186,12 +190,7 @@ async function handleInitModel(modelId: string) {
     }
     
     const localEngine = new LocalLLMEngine(modelId, (msg) => ui.status.setStatus(msg));
-    engine = new HybridLLMEngine(localEngine);
-    
-    // Apply current settings
-    const apiKey = (document.getElementById('geminiApiKey') as HTMLInputElement).value.trim();
-    const onlineEnabled = (document.getElementById('onlineModeToggle') as HTMLInputElement).checked;
-    engine.setOnlineConfig(apiKey, onlineEnabled);
+    engine = localEngine;
 
     await engine.init();
     logger.info('system', 'Model initialized');

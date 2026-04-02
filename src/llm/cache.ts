@@ -29,8 +29,27 @@ export function updateDownloadProgress(modelId: string, status: string): void {
   }
 }
 
+// Track callbacks for when downloads complete
+const downloadCompleteCallbacks: Array<() => void> = [];
+
+export function onDownloadComplete(callback: () => void): void {
+  downloadCompleteCallbacks.push(callback);
+}
+
 export function unregisterDownload(modelId: string): void {
+  const wasDownloading = activeDownloads.has(modelId);
   activeDownloads.delete(modelId);
+  
+  // If this was the last active download, trigger callbacks
+  if (wasDownloading && activeDownloads.size === 0) {
+    downloadCompleteCallbacks.forEach(callback => {
+      try {
+        callback();
+      } catch (error) {
+        console.error('Error in download complete callback:', error);
+      }
+    });
+  }
 }
 
 export function getActiveDownloads(): DownloadProgress[] {
@@ -200,6 +219,7 @@ export async function clearAllCachedModels(): Promise<void> {
 }
 
 export async function getAllCachedModels(): Promise<Array<{modelId: string, size: number, isCorrupted?: boolean, isEmpty?: boolean, isDownloading?: boolean, status?: string}>> {
+  console.log("🔍 getAllCachedModels called");
   try {
     if (typeof indexedDB === 'undefined') {
       logger.warn("llm", "IndexedDB not available");
@@ -207,7 +227,12 @@ export async function getAllCachedModels(): Promise<Array<{modelId: string, size
     }
     
     const databases = await indexedDB.databases();
+    console.log("🗄️ Found databases:", databases);
+    logger.debug("llm", "Found databases", { databases: databases.map(db => ({ name: db.name, version: db.version })) });
+    
     const webLLmDBs = databases.filter(db => db.name && db.name.startsWith('webllm:'));
+    logger.debug("llm", "WebLLM databases found", { count: webLLmDBs.length, databases: webLLmDBs.map(db => db.name) });
+    
     const models = [];
     const processedModelIds = new Set<string>();
     
@@ -226,14 +251,23 @@ export async function getAllCachedModels(): Promise<Array<{modelId: string, size
       const dbName = dbInfo.name!;
       const modelId = dbName.replace('webllm:', '');
       
+      logger.debug("llm", "Processing database", { dbName, modelId });
+      
       // Skip if already in list (e.g. if it's both downloading and has some data in IDB)
-      if (processedModelIds.has(modelId)) continue;
+      if (processedModelIds.has(modelId)) {
+        logger.debug("llm", "Skipping already processed model", { modelId });
+        continue;
+      }
       
       let size = getCachedModelSizeFromWebLLM(modelId);
       let calculationTimedOut = false;
 
+      logger.debug("llm", "Model size from WebLLM cache", { modelId, size });
+
       if (size === 0) {
+        logger.debug("llm", "Calculating IndexedDB size", { modelId, dbName });
         const measuredSize = await getIndexedDBSizeStatic(dbName);
+        logger.debug("llm", "Measured IndexedDB size", { modelId, measuredSize });
         if (measuredSize === -1) {
             calculationTimedOut = true;
             size = 0;
@@ -247,10 +281,31 @@ export async function getAllCachedModels(): Promise<Array<{modelId: string, size
       // If size is 0 and we didn't timeout, it might be truly empty.
       const isEmpty = size === 0 && !calculationTimedOut;
       
+      logger.debug("llm", "Model analysis complete", { 
+        modelId, 
+        size, 
+        sizeMB: (size / 1024 / 1024).toFixed(2),
+        isCorrupted, 
+        isEmpty,
+        calculationTimedOut 
+      });
+      
       models.push({ modelId, size, isCorrupted, isEmpty });
       processedModelIds.add(modelId);
     }
     
+    logger.debug("llm", "Final models result", { 
+      totalModels: models.length, 
+      models: models.map(m => ({ 
+        modelId: m.modelId, 
+        sizeMB: (m.size / 1024 / 1024).toFixed(2),
+        isCorrupted: m.isCorrupted,
+        isEmpty: m.isEmpty,
+        isDownloading: m.isDownloading 
+      }))
+    });
+    
+    console.log("📋 Final models result:", models.length, models);
     return models;
   } catch (error) {
     logger.error("llm", "Failed to get all cached models", { error });

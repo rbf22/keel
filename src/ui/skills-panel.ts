@@ -34,34 +34,35 @@ export class SkillsPanel {
   }
 
   async refresh() {
-    const skills = skillsEngine.getAvailableSkillsMetadata();
+    const allSkills = skillsEngine.getAllSkillsMetadata();
     
-    if (skills.length === 0) {
+    if (allSkills.length === 0) {
       this.skillsList.innerHTML = '<div class="output-log">No skills installed. Click "Install Skill" to add skills from GitHub.</div>';
       return;
     }
     
     this.skillsList.innerHTML = '';
     
-    for (const skill of skills) {
+    for (const skill of allSkills) {
       const skillDiv = document.createElement('div');
-      skillDiv.className = 'skill-item';
+      const isActive = skillsEngine.isSkillActive(skill.name);
+      skillDiv.className = `skill-item ${!isActive ? 'inactive' : ''}`;
       skillDiv.innerHTML = `
         <div class="skill-header">
           <h4>${skill.name}</h4>
-          <button class="skill-uninstall-btn" data-skill="${skill.name}">Uninstall</button>
+          <button class="skill-toggle-btn" data-skill="${skill.name}" data-active="${isActive}">
+            ${isActive ? 'Deactivate' : 'Activate'}
+          </button>
         </div>
         <p>${skill.description}</p>
         ${skill.tags ? `<div class="skill-tags">${skill.tags.map((tag: string) => `<span class="skill-tag">${tag}</span>`).join('')}</div>` : ''}
       `;
       
       skillDiv.onclick = async (e) => {
-        if (!(e.target as HTMLElement).classList.contains('skill-uninstall-btn')) {
+        if (!(e.target as HTMLElement).classList.contains('skill-toggle-btn')) {
           const fullSkill = await skillsEngine.getFullSkill(skill.name);
           if (fullSkill) {
             this.showSkillDetails(fullSkill);
-          } else {
-            alert(`Failed to load details for skill: ${skill.name}`);
           }
         }
       };
@@ -69,13 +70,27 @@ export class SkillsPanel {
       this.skillsList.appendChild(skillDiv);
     }
     
-    this.skillsList.querySelectorAll<HTMLButtonElement>('.skill-uninstall-btn').forEach(btn => {
+    this.skillsList.querySelectorAll<HTMLButtonElement>('.skill-toggle-btn').forEach(btn => {
       btn.onclick = async (e: MouseEvent) => {
         e.stopPropagation();
         const skillName = (btn as HTMLButtonElement).dataset.skill!;
-        if (confirm(`Uninstall skill "${skillName}"?`)) {
-          await skillsEngine.uninstallSkill(skillName);
-          this.refresh();
+        try {
+          const isActive = skillsEngine.toggleSkill(skillName);
+          btn.textContent = isActive ? 'Deactivate' : 'Activate';
+          btn.dataset.active = String(isActive);
+          
+          // Update the parent item's class
+          const skillItem = btn.closest('.skill-item');
+          if (skillItem) {
+            if (isActive) {
+              skillItem.classList.remove('inactive');
+            } else {
+              skillItem.classList.add('inactive');
+            }
+          }
+        } catch (error) {
+          console.error('Failed to toggle skill:', error);
+          alert(`Failed to toggle skill "${skillName}": ${error}`);
         }
       };
     });
