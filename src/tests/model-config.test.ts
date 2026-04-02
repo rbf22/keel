@@ -14,7 +14,7 @@ vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
 describe('Model configuration verification', () => {
   it('should include SmolLM2 in supported models', async () => {
     // Import the actual module
-    const { SUPPORTED_MODELS } = await import('../llm');
+    const { SUPPORTED_MODELS } = await import('../llm/models');
     
     console.log('All supported models:', SUPPORTED_MODELS.map(m => m.modelId));
     
@@ -27,7 +27,7 @@ describe('Model configuration verification', () => {
   });
   
   it('should have correct app config structure', async () => {
-    const { CUSTOM_APP_CONFIG } = await import('../llm');
+    const { CUSTOM_APP_CONFIG } = await import('../llm/models');
     
     expect(CUSTOM_APP_CONFIG.model_list).toBeDefined();
     expect(CUSTOM_APP_CONFIG.model_list.length).toBeGreaterThan(0);

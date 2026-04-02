@@ -24,6 +24,9 @@ from js import postMessage
 def download_file(filename, content):
     postMessage(json.dumps({"type": "download", "filename": filename, "content": content}))
 
+def save_file(path, content):
+    postMessage(json.dumps({"type": "vfs_write", "path": path, "content": content}))
+
 def log(message):
     postMessage(json.dumps({"type": "log", "message": str(message)}))
 
@@ -48,6 +51,7 @@ for mod in ['os', 'subprocess', 'socket', 'multiprocessing']:
 # Inject helpers into global namespace
 import builtins
 builtins.download_file = download_file
+builtins.save_file = save_file
 builtins.log = log
     `);
 

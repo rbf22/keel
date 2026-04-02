@@ -66,7 +66,7 @@ describe('Agent Architecture - Code Artifacts', () => {
   describe('Skill Selection Logic', () => {
     it('should select python-coding for math tasks', () => {
       // Access private method through type assertion for testing
-      const selectSkill = (orchestrator as any).selectSkill.bind(orchestrator);
+      const selectSkill = (orchestrator as any).skillManager.selectSkill.bind((orchestrator as any).skillManager);
       
       expect(selectSkill('what is the sum of 5 and 3')).toBe('python-coding');
       expect(selectSkill('calculate 2 * 4')).toBe('python-coding');
@@ -74,7 +74,7 @@ describe('Agent Architecture - Code Artifacts', () => {
     });
 
     it('should select data-analysis for data tasks', () => {
-      const selectSkill = (orchestrator as any).selectSkill.bind(orchestrator);
+      const selectSkill = (orchestrator as any).skillManager.selectSkill.bind((orchestrator as any).skillManager);
       
       expect(selectSkill('analyze this dataset')).toBe('data-analysis');
       expect(selectSkill('process the sales data')).toBe('data-analysis');
@@ -82,7 +82,7 @@ describe('Agent Architecture - Code Artifacts', () => {
     });
 
     it('should select research for investigation tasks', () => {
-      const selectSkill = (orchestrator as any).selectSkill.bind(orchestrator);
+      const selectSkill = (orchestrator as any).skillManager.selectSkill.bind((orchestrator as any).skillManager);
       
       expect(selectSkill('research market trends')).toBe('research');
       expect(selectSkill('find information about AI')).toBe('research');
@@ -90,7 +90,7 @@ describe('Agent Architecture - Code Artifacts', () => {
     });
 
     it('should select task-planning for complex tasks', () => {
-      const selectSkill = (orchestrator as any).selectSkill.bind(orchestrator);
+      const selectSkill = (orchestrator as any).skillManager.selectSkill.bind((orchestrator as any).skillManager);
       
       expect(selectSkill('plan a complex project')).toBe('task-planning');
       expect(selectSkill('break down this task')).toBe('task-planning');
@@ -170,7 +170,7 @@ describe('Agent Architecture - Code Artifacts', () => {
 
   describe('Input Extraction', () => {
     it('should extract numbers from math requests', () => {
-      const extractInputs = (orchestrator as any).extractInputsFromRequest.bind(orchestrator);
+      const extractInputs = (orchestrator as any).artifactHandler.extractInputsFromRequest.bind((orchestrator as any).artifactHandler);
       
       const artifact = {
         name: 'sum_calculator',
@@ -185,7 +185,7 @@ describe('Agent Architecture - Code Artifacts', () => {
     });
 
     it('should generate execution code for different artifact types', () => {
-      const generateCode = (orchestrator as any).generateExecutionCode.bind(orchestrator);
+      const generateCode = (orchestrator as any).artifactHandler.generateExecutionCode.bind((orchestrator as any).artifactHandler);
       
       const sumArtifact = {
         name: 'sum_calculator',

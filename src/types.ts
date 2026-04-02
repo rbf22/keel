@@ -24,12 +24,13 @@ export interface AgentMemory {
 }
 
 export interface PythonOutput {
-  type: 'log' | 'download' | 'error' | 'ready' | 'complete';
+  type: 'log' | 'download' | 'error' | 'ready' | 'complete' | 'code' | 'vfs_write';
   message?: string;
   data?: unknown;
   spec?: unknown;
   filename?: string;
   content?: string;
+  path?: string;
 }
 
 export type ResponseType = 'text' | 'error' | 'plan' | 'observation' | 'token' | 'complete' | 'tool_call' | 'memory_added';

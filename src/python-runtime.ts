@@ -25,16 +25,9 @@ export class PythonRuntime {
   }
   
   /**
-   * Get the current active output handler
+   * Push a new output handler onto the stack
    */
-  get onOutput(): (output: PythonOutput) => void {
-    return this.outputHandlers.getCurrent();
-  }
-  
-  /**
-   * Set a new output handler (pushes to stack)
-   */
-  set onOutput(handler: (output: PythonOutput) => void) {
+  pushHandler(handler: (output: PythonOutput) => void): void {
     this.outputHandlers.push(handler);
   }
   
@@ -43,6 +36,30 @@ export class PythonRuntime {
    */
   restoreHandler(): void {
     this.outputHandlers.pop();
+  }
+
+  /**
+   * Dispatch output to the current handler, with broadcasting for system events
+   */
+  private dispatchOutput(output: PythonOutput) {
+    const current = this.outputHandlers.getCurrent();
+    const defaultH = this.outputHandlers.getDefault();
+    
+    // Always broadcast 'code' and 'vfs_write' to the default (UI) handler
+    if ((output.type === 'code' || output.type === 'vfs_write') && current !== defaultH) {
+      try {
+        defaultH(output);
+      } catch (err) {
+        logger.error('python', 'Error in default output handler', { err });
+      }
+    }
+    
+    // Always send to current handler
+    try {
+      current(output);
+    } catch (err) {
+      logger.error('python', 'Error in current output handler', { err });
+    }
   }
   
   /**
@@ -68,6 +85,7 @@ export class PythonRuntime {
       // Try multiple worker loading strategies for compatibility
       logger.debug('python', 'Creating Python worker');
       
+      let errorToReport: Error | null = null;
       try {
         // Strategy 1: Standard Vite worker URL
         this.worker = new Worker(new URL('./python-worker.ts', import.meta.url), {
@@ -76,50 +94,56 @@ export class PythonRuntime {
         logger.debug('python', 'Worker created with standard Vite URL');
       } catch (workerError) {
         logger.error('python', 'Failed to create worker with standard URL', { error: workerError });
-        // If this fails, the onerror handler will catch it
+        errorToReport = workerError instanceof Error ? workerError : new Error(String(workerError));
       }
 
-      this.worker!.onmessage = (event) => {
-        const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        logger.debug('python', `Worker output: ${output.type}`, output);
-        
-        if (output.type === 'ready') {
-          logger.info('python', 'Python runtime ready');
-          this.isReady = true;
-          this.onOutput(output);
-          resolve();
-        } else if (output.type === 'error' && !this.isReady) {
-          // If we haven't resolved yet and we get an error, reject the init promise
-          const errorMsg = output.message || 'Unknown initialization error';
-          logger.error('python', `Initialization failed: ${errorMsg}`);
+      if (this.worker) {
+        this.worker.onmessage = (event) => {
+          const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          logger.debug('python', `Worker output: ${output.type}`, output);
           
-          let userFriendlyError = errorMsg;
-          if (errorMsg.includes('Failed to fetch')) {
-            userFriendlyError = 'Failed to download Python runtime (Pyodide) or packages (pandas, numpy). Please check your internet connection.';
+          if (output.type === 'ready') {
+            logger.info('python', 'Python runtime ready');
+            this.isReady = true;
+            this.dispatchOutput(output);
+            resolve();
+          } else if (output.type === 'error' && !this.isReady) {
+            // If we haven't resolved yet and we get an error, reject the init promise
+            const errorMsg = output.message || 'Unknown initialization error';
+            logger.error('python', `Initialization failed: ${errorMsg}`);
+            
+            let userFriendlyError = errorMsg;
+            if (errorMsg.includes('Failed to fetch')) {
+              userFriendlyError = 'Failed to download Python runtime (Pyodide) or packages (pandas, numpy). Please check your internet connection.';
+            }
+            
+            this.terminate();
+            reject(new Error(userFriendlyError));
+          } else {
+            this.dispatchOutput(output);
           }
-          
-          this.terminate();
-          reject(new Error(userFriendlyError));
-        } else {
-          this.onOutput(output);
-        }
-      };
+        };
 
-      this.worker!.onerror = (error) => {
-        logger.error('python', 'Worker error occurred during initialization', { 
-          error,
-          message: error.message,
-          filename: error.filename,
-          lineno: error.lineno,
-          colno: error.colno
-        });
-        const errorMessage = error.message || 'Python worker failed to load. This might be due to a network error, browser restriction, or the worker file not being found.';
-        this.onOutput({ type: 'error', message: errorMessage });
-        if (!this.isReady) {
-          this.terminate();
-          reject(new Error(errorMessage));
-        }
-      };
+        this.worker.onerror = (error) => {
+          logger.error('python', 'Worker error occurred during initialization', { 
+            error,
+            message: error.message,
+            filename: error.filename,
+            lineno: error.lineno,
+            colno: error.colno
+          });
+          const errorMessage = error.message || 'Python worker failed to load. This might be due to a network error, browser restriction, or the worker file not being found.';
+          this.dispatchOutput({ type: 'error', message: errorMessage });
+          if (!this.isReady) {
+            this.terminate();
+            reject(new Error(errorMessage));
+          }
+        };
+      } else {
+        const errorMessage = errorToReport?.message || 'Failed to create Python worker.';
+        logger.error('python', errorMessage);
+        reject(new Error(errorMessage));
+      }
     });
   }
 
@@ -209,6 +233,12 @@ export class PythonRuntime {
         const output: PythonOutput = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         logger.debug('python', `Execution message: ${output.type}`, { executionId });
         
+        // Critical Fix: Always broadcast 'code' and 'vfs_write' to the UI
+        // even if a skill is using a temporary output handler
+        if (output.type === 'code' || output.type === 'vfs_write') {
+          this.outputHandlers.getDefault()(output);
+        }
+
         if (output.type === 'complete' || output.type === 'error') {
           // Clear current reject
           this.currentReject = null;
@@ -239,6 +269,9 @@ export class PythonRuntime {
 
       this.worker!.addEventListener('message', handleMessage);
 
+      // Notify about the code being executed
+      this.dispatchOutput({ type: 'code', content: code });
+
       logger.debug('python', 'Sending code to worker', { executionId });
       this.worker!.postMessage(JSON.stringify({ type: 'execute', code, resources, executionId }));
 
@@ -257,7 +290,7 @@ export class PythonRuntime {
           // Terminate the worker
           this.terminate();
           // Send error output
-          this.onOutput({ type: 'error', message: 'Execution timed out. Worker terminated.' });
+          this.dispatchOutput({ type: 'error', message: 'Execution timed out. Worker terminated.' });
           // Reject the promise
           reject(new Error('Execution timed out'));
         }

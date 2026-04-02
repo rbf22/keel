@@ -45,6 +45,13 @@ export class HandlerManager<T> {
     clear(): void {
         this.handlers = [];
     }
+
+    /**
+     * Get the default handler (the one provided during construction)
+     */
+    getDefault(): T {
+        return this.defaultHandler;
+    }
     
     /**
      * Get the number of active handlers

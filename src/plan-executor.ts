@@ -3,7 +3,7 @@ import { skillsEngine } from "./skills/engine";
 import { PythonRuntime } from "./python-runtime";
 
 // Import interfaces from orchestrator
-import { ExecutionPlan, Subtask, SharedContext, CodeArtifact } from "./orchestrator";
+import { ExecutionPlan, Subtask, SharedContext, CodeArtifact } from "./orchestrator/types";
 
 /**
  * PlanExecutor - Manages structured task execution with shared context
@@ -215,11 +215,24 @@ export class PlanExecutor {
       // Parse for artifacts
       let artifact: CodeArtifact | undefined;
       try {
-        const parsed = JSON.parse(result.output || '');
-        if (parsed.id && parsed.function) {
-          artifact = parsed;
-          if (artifact) {
-            context.artifacts.push(artifact);
+        const output = result.output || '';
+        const jsonStart = output.indexOf('{');
+        const jsonEnd = output.lastIndexOf('}');
+        
+        if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+          const jsonStr = output.substring(jsonStart, jsonEnd + 1);
+          const parsed = JSON.parse(jsonStr);
+          
+          if (parsed.id && parsed.function) {
+            artifact = parsed;
+            if (artifact) {
+              context.artifacts.push(artifact);
+              // Save to VFS for persistence
+              const artifactPath = `keel://artifacts/${artifact.id || 'unnamed'}.py`;
+              const storage = (await import("./storage")).storage;
+              await storage.writeFile(artifactPath, 
+                `# Artifact: ${artifact.name}\n# ID: ${artifact.id}\n\n${artifact.function}\n\n${artifact.usage || ''}`);
+            }
           }
         }
       } catch (e) {

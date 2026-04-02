@@ -1,7 +1,7 @@
 import { PythonRuntime } from '../python-runtime'
 import { PythonOutput } from '../types'
 import { skillStorage } from '../storage/skills'
-import { SkillsParser, ParsedSkill, CodeBlock, SkillMetadata } from './parser.js'
+import { SkillsParser, ParsedSkill, SkillMetadata } from './parser.js'
 import { logger } from '../logger'
 
 export interface SkillExecutionContext {
@@ -17,6 +17,8 @@ export interface SkillExecutionResult {
   pythonCode?: string
   error?: string
 }
+
+import { SKILL_FILES, SCRIPT_FILES, REFERENCE_FILES } from './discovery'
 
 export class SkillsEngine {
   private skillMetadata = new Map<string, SkillMetadata>()
@@ -74,36 +76,54 @@ export class SkillsEngine {
     await this.loadSkillsFromFilesystem();
   }
 
-  // Load skills from filesystem (for development)
+  // Load skills from filesystem (dynamic discovery via Vite glob)
   async loadSkillsFromFilesystem(): Promise<void> {
-    // Discover all skill directories by fetching the skills index
-    const response = await fetch('/keel/src/skills/index.json')
-    if (!response.ok) {
-      throw new Error(`Failed to load skills index: ${response.status}`)
-    }
+    logger.info('skills', 'Initializing built-in skills from filesystem (dynamic discovery)');
     
-    const skillIndex = await response.json()
-    logger.info('skills', 'Loading skills from index', { 
-      skillCount: skillIndex.skills.length 
-    })
-    
-    for (const skillPath of skillIndex.skills) {
+    const skillPaths = Object.keys(SKILL_FILES);
+    logger.info('skills', `Discovered ${skillPaths.length} skills via glob`);
+
+    for (const path of skillPaths) {
       try {
-        const skillResponse = await fetch(`/keel/src/skills/${skillPath}/SKILL.md`)
-        if (!skillResponse.ok) {
-          logger.warn('skills', `Failed to load skill ${skillPath}`, { 
-            status: skillResponse.status 
-          })
-          continue
+        // Extract skill ID from path (e.g., "./python-coding/SKILL.md" -> "python-coding")
+        const pathParts = path.split('/');
+        const skillId = pathParts[pathParts.length - 2];
+        const content = SKILL_FILES[path] as string;
+        
+        if (!content) {
+          logger.warn('skills', `Empty content for skill at ${path}`);
+          continue;
         }
+
+        const skill = SkillsParser.parse(content);
+        skill.resources = skill.resources || {};
+
+        // Find all scripts for this skill
+        const skillDirPrefix = path.replace('SKILL.md', '');
         
-        const content = await skillResponse.text()
-        const skill = SkillsParser.parse(content)
-        this.registerSkill(skill)
-        
-        logger.info('skills', `Loaded skill from filesystem: ${skill.name}`)
+        // Load scripts
+        const scriptPaths = Object.keys(SCRIPT_FILES).filter(p => p.startsWith(skillDirPrefix));
+        for (const scriptPath of scriptPaths) {
+          const relPath = scriptPath.replace(skillDirPrefix, '');
+          const loadFn = SCRIPT_FILES[scriptPath] as () => Promise<string>;
+          skill.resources[relPath] = await loadFn();
+        }
+
+        // Load references
+        const refPaths = Object.keys(REFERENCE_FILES).filter(p => p.startsWith(skillDirPrefix));
+        for (const refPath of refPaths) {
+          const relPath = refPath.replace(skillDirPrefix, '');
+          const loadFn = REFERENCE_FILES[refPath] as () => Promise<string>;
+          skill.resources[relPath] = await loadFn();
+        }
+
+        this.registerSkill(skill);
+        logger.info('skills', `Loaded skill: ${skill.name}`, {
+          id: skillId,
+          resourceCount: Object.keys(skill.resources).length
+        });
       } catch (error) {
-        logger.error('skills', `Failed to load skill ${skillPath} from filesystem`, { error })
+        logger.error('skills', `Failed to load skill at ${path}`, { error });
       }
     }
   }
@@ -167,11 +187,16 @@ export class SkillsEngine {
     }
   }
   
-  // Get skill descriptions for LLM context (Level 1)
+  // Get skill descriptions for LLM context (Tier 1 disclosure)
   getSkillsDescription(): string {
     return Array.from(this.skillMetadata.values())
-      .map(s => `- ${s.name}: ${s.description}`)
+      .map(s => `<skill>\n  <name>${s.name}</name>\n  <description>${s.description}</description>\n</skill>`)
       .join('\n')
+  }
+
+  // Get skill catalog for system prompt (Tier 1)
+  getSkillCatalog(): string {
+    return `<available_skills>\n${this.getSkillsDescription()}\n</available_skills>`
   }
   
   // Parse LLM response for skill calls
@@ -236,37 +261,34 @@ export class SkillsEngine {
     });
 
     try {
-      // Find Python code blocks (prefer converted if available)
-      const pythonBlock = skill.codeBlocks.find((block: CodeBlock) => 
-        block.language === 'python' || block.converted
-      )
+      // Look for main execution script in resources
+      const mainScript = skill.resources?.['scripts/main.py'] || skill.resources?.['scripts/execute.py']
 
-      if (!pythonBlock) {
-        logger.error('skills', 'No Python code found in skill', { 
-          skillName,
-          availableLanguages: skill.codeBlocks.map(b => b.language)
-        });
+      if (!mainScript) {
+        logger.debug('skills', 'No execution script found, returning instructions for Tier 2 activation', { skillName });
+        // According to the spec, if we just want Tier 2 disclosure, we return the Instructions
         return {
-          success: false,
-          error: `No Python code found in skill: ${skillName}`
+          success: true,
+          output: `<skill_content name="${skill.name}">\n${skill.content}\n\nSkill directory: /src/skills/${skillName}\n<skill_resources>\n${Object.keys(skill.resources || {}).map(r => `  <file>${r}</file>`).join('\n')}\n</skill_resources>\n</skill_content>`
         }
       }
 
-      logger.debug('skills', 'Found Python code block', { 
+      logger.info('skills', 'Executing skill via script', { 
         skillName,
-        isConverted: !!pythonBlock.converted,
-        codeLength: pythonBlock.code.length
+        scriptLength: mainScript.length
       });
 
-      // Use converted code if available
-      let pythonCode = pythonBlock.converted || pythonBlock.code
+      // Prepare a minimal caller that sets up parameters and execute the script
+      let pythonCode = `
+import json
+# Set up parameters
+params = json.loads('''${JSON.stringify(params)}''')
+for key, value in params.items():
+    globals()[key] = value
 
-      // Interpolate parameters
-      pythonCode = this.interpolateParams(pythonCode, params)
-      logger.debug('skills', 'Parameters interpolated', { 
-        skillName,
-        finalCodeLength: pythonCode.length
-      });
+# Execute the script
+${mainScript}
+`
 
       // Execute in Python runtime with resources (Level 3 disclosure)
       let outputResult = ''
@@ -369,29 +391,6 @@ export class SkillsEngine {
     }
   }
 
-  // Interpolate parameters into code
-  private interpolateParams(code: string, params: Record<string, unknown>): string {
-    let result = code
-    
-    for (const [key, value] of Object.entries(params)) {
-      const placeholder = `{{${key}}}`
-      
-      if (typeof value === 'string') {
-        result = result.replace(
-          new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'),
-          `'${value.replace(/'/g, "\\'")}'`
-        )
-      } else {
-        result = result.replace(
-          new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'),
-          JSON.stringify(value)
-        )
-      }
-    }
-    
-    return result
-  }
-  
   // Install a skill from storage
   async installSkill(skillName: string): Promise<void> {
     const stored = await skillStorage.getSkill(skillName)

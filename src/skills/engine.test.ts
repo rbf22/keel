@@ -29,20 +29,10 @@ vi.mock('../storage/skills', () => ({
   }
 }))
 
-// Mock fetch for skills loading
-global.fetch = vi.fn().mockImplementation((url: string) => {
-  if (url.includes('index.json')) {
-    return Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({ skills: ['calculator', 'analyze-data'] })
-    } as Response)
-  }
-  
-  // Mock SKILL.md content for calculator and analyze-data
-  if (url.includes('calculator/SKILL.md')) {
-    return Promise.resolve({
-      ok: true,
-      text: () => Promise.resolve(`---
+// Mock the discovery module
+vi.mock('./discovery', () => ({
+  SKILL_FILES: {
+    './calculator/SKILL.md': `---
 name: calculator
 description: A simple calculator skill that evaluates mathematical expressions
 tags: [math, utility]
@@ -54,14 +44,8 @@ Evaluates mathematical expressions.
 
 ## Usage
 
-<skill name="calculator">{"expression": "2 + 2"}</skill>`)
-    } as Response)
-  }
-  
-  if (url.includes('analyze-data/SKILL.md')) {
-    return Promise.resolve({
-      ok: true,
-      text: () => Promise.resolve(`---
+<skill name="calculator">{"expression": "2 + 2"}</skill>`,
+    './analyze-data/SKILL.md': `---
 name: analyze-data
 description: Analyzes data using Python
 tags: [data, analysis]
@@ -69,14 +53,18 @@ tags: [data, analysis]
 
 # Data Analysis Skill
 
-Analyzes data using Python.)
+Analyzes data using Python.
 
 ## Usage
 
-<skill name="analyze-data">{"data": [1, 2, 3]}</skill>`)
-    } as Response)
-  }
-  
+<skill name="analyze-data">{"data": [1, 2, 3]}</skill>`
+  },
+  SCRIPT_FILES: {},
+  REFERENCE_FILES: {}
+}))
+
+// Mock fetch for other things
+global.fetch = vi.fn().mockImplementation((url: string) => {
   return Promise.resolve({
     ok: false,
     status: 404

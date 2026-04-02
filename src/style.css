@@ -95,10 +95,21 @@ body {
 
 .input-area {
   display: flex;
-  padding: 1rem;
+  padding: 0.75rem 1rem;
   gap: 0.5rem;
   background: #222;
   border-top: 1px solid #333;
+  align-items: center;
+}
+
+#modelSelect {
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #444;
+  background: #111;
+  color: #fff;
+  font-size: 0.8rem;
+  max-width: 180px;
 }
 
 input {
@@ -119,6 +130,12 @@ button {
   color: white;
   font-weight: bold;
   cursor: pointer;
+}
+
+.small-button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
 }
 
 button:disabled {
@@ -207,11 +224,26 @@ button:disabled {
   padding: 0;
 }
 
-#pythonOutput.output-content,
+#pythonOutputTab.output-content,
 #debugLogs.output-content,
 #contextTab.output-content {
   padding: 0;
   gap: 0;
+}
+
+.python-header {
+  padding: 0.5rem 1rem;
+  background: #222;
+  border-bottom: 1px solid #333;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.python-log-container {
+  padding: 1rem;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .logs-header, .context-header {
@@ -321,43 +353,23 @@ button:disabled {
   overflow-y: auto;
 }
 
-/* Settings Tab */
-.settings-container {
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  text-align: left;
+.settings-section {
+  background: #1a1a1a;
+  padding: 1.25rem;
+  border-radius: 8px;
+  border: 1px solid #333;
 }
 
-.settings-container h3 {
-  margin: 0;
-  font-size: 1.2rem;
-  color: #eee;
+.settings-section h4 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: #007aff;
+  font-size: 1rem;
 }
 
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.settings-group label {
-  font-size: 0.9rem;
-  font-weight: bold;
-  color: #ccc;
-}
-
-.settings-hint {
-  font-size: 0.75rem;
-  color: #888;
-  margin: 0;
-}
-
-#saveSettingsBtn {
-  align-self: flex-start;
-  margin-top: 0.5rem;
-}
+#apiTestStatus.success { color: #51cf66; }
+#apiTestStatus.error { color: #ff6b6b; }
+#apiTestStatus.loading { color: #888; }
 
 /* Artifacts in Chat */
 .artifact-container {
