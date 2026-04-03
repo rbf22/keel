@@ -163,9 +163,17 @@ export class SkillsEngine {
   
   // Get all available skills (metadata only for Level 1 disclosure)
   getAvailableSkillsMetadata(): SkillMetadata[] {
-    return Array.from(this.skillMetadata.values()).filter(skill => 
+    const skills = Array.from(this.skillMetadata.values()).filter(skill => 
       this.activeSkills.has(skill.name)
-    )
+    );
+    
+    logger.info('skills', 'Available skills metadata', { 
+      totalSkills: skills.length,
+      skillNames: skills.map(s => s.name),
+      activeSkills: Array.from(this.activeSkills)
+    });
+    
+    return skills;
   }
 
   // Get all skills (including inactive ones)
@@ -301,8 +309,36 @@ export class SkillsEngine {
     });
 
     try {
-      // Look for main execution script in resources
-      const mainScript = skill.resources?.['scripts/main.py'] || skill.resources?.['scripts/execute.py']
+      // Look for skill-specific execution scripts
+      const scriptMappings: Record<string, string[]> = {
+        'python-coding': ['scripts/create_code_artifact.py'],
+        'data-analysis': ['scripts/analyze_dataset.py'],
+        'quality-review': ['scripts/review_code_artifact.py'],
+        'task-planning': ['scripts/generate_structured_plan.py', 'scripts/analyze_requirements.py'],
+        'research': ['scripts/answer_question.py'],
+        'analyze-data': [], // No scripts available
+        'execution-analyzer': [], // No scripts available
+        'skill-selector': ['scripts/select_skills.py'],
+        'parameter-analyzer': ['scripts/analyze_parameters.py'],
+        'knowledge-manager': ['scripts/manage_knowledge.py']
+      };
+
+      const availableScripts = scriptMappings[skillName] || [];
+      let mainScript: string | undefined;
+
+      // Look for any available script for this skill
+      for (const scriptPath of availableScripts) {
+        mainScript = skill.resources?.[scriptPath];
+        if (mainScript) {
+          logger.info('skills', `Found script: ${scriptPath}`, { skillName });
+          break;
+        }
+      }
+
+      // Fallback to generic script names for backward compatibility
+      if (!mainScript) {
+        mainScript = skill.resources?.['scripts/main.py'] || skill.resources?.['scripts/execute.py'];
+      }
 
       if (!mainScript) {
         logger.debug('skills', 'No execution script found, returning instructions for Tier 2 activation', { skillName });
@@ -319,12 +355,32 @@ export class SkillsEngine {
       });
 
       // Prepare a minimal caller that sets up parameters and execute the script
+      // Use base64 encoding to safely pass complex JSON parameters
+      const paramsBase64 = btoa(JSON.stringify(params))
+      
+      // Inject available skills for skill-selector
+      const availableSkills = this.getAvailableSkillsMetadata().map((skill: any) => skill.name)
+      const availableSkillsBase64 = btoa(JSON.stringify(availableSkills))
+      
+      logger.info('skills', 'Injecting available skills for skill-selector', { 
+        skillName,
+        availableSkillsCount: availableSkills.length,
+        availableSkills: availableSkills,
+        isSkillSelector: skillName === 'skill-selector'
+      });
+      
       let pythonCode = `
 import json
-# Set up parameters
-params = json.loads('''${JSON.stringify(params)}''')
+import base64
+# Set up parameters from base64-encoded JSON to handle complex nested data
+params_json = base64.b64decode('''${paramsBase64}''').decode('utf-8')
+params = json.loads(params_json)
 for key, value in params.items():
     globals()[key] = value
+
+# Inject available skills for skill-selector
+available_skills_json = base64.b64decode('''${availableSkillsBase64}''').decode('utf-8')
+available_skills = json.loads(available_skills_json)
 
 # Execute the script
 ${mainScript}

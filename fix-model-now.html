@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fix Model Selection</title>
+</head>
+<body>
+    <h1>Fix Model Selection</h1>
+    <button onclick="fixModel()">Fix Model Selection</button>
+    <div id="result"></div>
+    
+    <script>
+        function fixModel() {
+            const result = document.getElementById('result');
+            
+            // Clear the invalid model selection
+            localStorage.removeItem('selectedModelId');
+            result.innerHTML += '<p>Cleared invalid selectedModelId</p>';
+            
+            // Set to a known good model (SmolLM2-360M is the smallest and should work)
+            const goodModel = 'SmolLM2-360M-Instruct-q4f16_1-MLC';
+            localStorage.setItem('selectedModelId', goodModel);
+            result.innerHTML += `<p>Set selectedModelId to: ${goodModel}</p>`;
+            
+            // Verify the fix
+            const currentSelection = localStorage.getItem('selectedModelId');
+            result.innerHTML += `<p>Current selectedModelId: ${currentSelection}</p>`;
+            
+            result.innerHTML += '<p><strong>Model selection fix complete! Please refresh the main application page.</strong></p>';
+        }
+    </script>
+</body>
+</html>

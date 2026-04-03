@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skill Selector Test</title>
+</head>
+<body>
+    <h1>Skill Selector Test</h1>
+    <div id="output"></div>
+    
+    <script>
+        // Test the skill selector directly
+        const testQuestion = "what is the difference between cats and dogs?";
+        
+        // Simulate the skill selector logic
+        function testSkillSelection(question) {
+            const availableSkills = [
+                'python-coding', 'data-analysis', 'research', 'quality-review', 
+                'task-planning', 'execution-analyzer', 'knowledge-manager'
+            ];
+            
+            const questionLower = question.toLowerCase();
+            
+            // Enhanced research detection for factual questions
+            const researchKeywords = ['research', 'find', 'search', 'investigate', 'lookup', 'information', 
+                                   'what is', 'what are', 'difference between', 'compare', 'versus', 'vs',
+                                   'how much', 'how many', 'when did', 'where is', 'who is', 'why does'];
+            const questionPatterns = ['what is the', 'what are the', 'difference between', 'how much', 
+                                       'how many', 'compare', 'versus', 'vs'];
+            
+            let researchScore = 0.5; // Base confidence
+            let reasoning = [];
+            
+            // Check for question patterns
+            if (questionPatterns.some(pattern => questionLower.includes(pattern))) {
+                researchScore += 0.5;
+                reasoning.push('factual question detected');
+            }
+            
+            // Check for research keywords
+            if (researchKeywords.some(keyword => questionLower.includes(keyword))) {
+                researchScore += 0.3;
+                reasoning.push('information gathering required');
+            }
+            
+            // Specific factual question indicators
+            if (['weight', 'height', 'size', 'cost', 'price', 'age'].some(word => questionLower.includes(word))) {
+                researchScore += 0.2;
+                reasoning.push('quantitative factual question');
+            }
+            
+            // General knowledge questions
+            if (questionLower.startsWith('what') || questionLower.startsWith('how') || questionLower.startsWith('when')) {
+                researchScore += 0.2;
+                reasoning.push('general knowledge question');
+            }
+            
+            const result = {
+                question: question,
+                selectedSkill: researchScore > 0.7 ? 'research' : 'python-coding',
+                confidence: Math.min(researchScore, 1.0),
+                reasoning: reasoning.join('; ')
+            };
+            
+            return result;
+        }
+        
+        // Run the test
+        const result = testSkillSelection(testQuestion);
+        
+        // Display results
+        document.getElementById('output').innerHTML = `
+            <h2>Test Results</h2>
+            <p><strong>Question:</strong> "${result.question}"</p>
+            <p><strong>Selected Skill:</strong> ${result.selectedSkill}</p>
+            <p><strong>Confidence:</strong> ${result.confidence.toFixed(2)}</p>
+            <p><strong>Reasoning:</strong> ${result.reasoning}</p>
+            <p><strong>Expected:</strong> research with high confidence</p>
+            <p><strong>Status:</strong> ${result.selectedSkill === 'research' ? '✅ PASS' : '❌ FAIL'}</p>
+        `;
+        
+        console.log('Skill Selector Test Result:', result);
+    </script>
+</body>
+</html>

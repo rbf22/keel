@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebLLM Model Size Calculator</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #fff; padding: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #007AFF; }
+        .warning { color: #ffa500; }
+        button { padding: 10px; margin: 5px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:hover { background: #555; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #333; }
+        .model-summary { margin: 15px 0; padding: 15px; border-left: 3px solid #51cf66; background: #111; }
+        .url-entry { margin: 8px 0; padding: 8px; border-left: 2px solid #007AFF; background: #0a0a0a; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>📏 WebLLM Model Size Calculator</h1>
+    
+    <div class="section">
+        <button onclick="calculateModelSizes()">📏 Calculate Actual Model Sizes</button>
+        <button onclick="clearOutput()">🗑️ Clear Output</button>
+        <button onclick="exportResults()">📤 Export Results</button>
+    </div>
+
+    <pre id="output"></pre>
+
+    <script>
+        let modelSizes = {};
+
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+            modelSizes = {};
+        }
+
+        function calculateSize(value) {
+            if (value === null || value === undefined) return 0;
+            
+            if (value instanceof ArrayBuffer) {
+                return value.byteLength;
+            }
+            
+            if (value instanceof Uint8Array || value instanceof Int8Array || 
+                value instanceof Uint16Array || value instanceof Int16Array ||
+                value instanceof Uint32Array || value instanceof Int32Array) {
+                return value.length * value.BYTES_PER_ELEMENT;
+            }
+            
+            if (typeof value === 'string') {
+                return value.length * 2;
+            }
+            
+            if (typeof value === 'number') {
+                return 8;
+            }
+            
+            if (typeof value === 'boolean') {
+                return 4;
+            }
+            
+            if (Array.isArray(value)) {
+                if (value.length > 100) {
+                    return value.length * 8; // Estimate
+                }
+                return value.reduce((sum, item) => sum + calculateSize(item), 0);
+            }
+            
+            if (typeof value === 'object') {
+                let size = 0;
+                
+                // Check for ArrayBuffer in data property (WebLLM stores data here)
+                if (value.data && (value.data instanceof ArrayBuffer || value.data instanceof Uint8Array)) {
+                    return value.data.byteLength || value.data.length || 0;
+                }
+                
+                const keys = Object.keys(value);
+                for (let i = 0; i < Math.min(keys.length, 50); i++) {
+                    const key = keys[i];
+                    size += key.length * 2;
+                    size += calculateSize(value[key]);
+                }
+                return size;
+            }
+            
+            return 0;
+        }
+
+        function extractModelIdFromUrl(url) {
+            // Extract model ID from URL patterns like:
+            // https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/...
+            // https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/...
+            
+            const patterns = [
+                /mlc-ai\/([^\/]+)-MLC/,
+                /mlc-ai\/([^\/]+)/,
+                /([^\/]+)-MLC/
+            ];
+            
+            for (const pattern of patterns) {
+                const match = url.match(pattern);
+                if (match) {
+                    return match[1] + '-MLC';
+                }
+            }
+            
+            return 'unknown-model';
+        }
+
+        async function calculateModelSizes() {
+            log("=== 📏 CALCULATING ACTUAL MODEL SIZES ===", 'info');
+            modelSizes = {};
+            
+            try {
+                // Open the webllm/model database
+                const dbName = 'webllm/model';
+                const db = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open(dbName);
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => resolve(request.result);
+                    request.onupgradeneeded = (event) => {
+                        log(`⚠️ Database upgrade needed: ${event.oldVersion} → ${event.newVersion}`, 'warning');
+                    };
+                });
+                
+                log(`✅ Opened webllm/model database`, 'success');
+                
+                // Get all entries from the urls store
+                const transaction = db.transaction(['urls'], 'readonly');
+                const store = transaction.objectStore('urls');
+                
+                const allEntries = await new Promise((resolve, reject) => {
+                    const request = store.getAll();
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+                
+                log(`📊 Found ${allEntries.length} total entries`, 'info');
+                
+                // Group entries by model
+                const modelGroups = {};
+                let totalSize = 0;
+                
+                allEntries.forEach((entry, index) => {
+                    const url = entry.url || 'unknown-url';
+                    const modelId = extractModelIdFromUrl(url);
+                    const entrySize = calculateSize(entry);
+                    
+                    if (!modelGroups[modelId]) {
+                        modelGroups[modelId] = {
+                            modelId,
+                            entries: [],
+                            totalSize: 0
+                        };
+                    }
+                    
+                    modelGroups[modelId].entries.push({
+                        index,
+                        url,
+                        size: entrySize,
+                        sizeMB: (entrySize / 1024 / 1024).toFixed(2)
+                    });
+                    
+                    modelGroups[modelId].totalSize += entrySize;
+                    totalSize += entrySize;
+                });
+                
+                log(`📊 Grouped into ${Object.keys(modelGroups).length} models`, 'info');
+                
+                // Display results for each model
+                for (const [modelId, group] of Object.entries(modelGroups)) {
+                    log(`\n🎯 Model: ${modelId}`, 'success');
+                    log(`   📊 Total Size: ${(group.totalSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                    log(`   📦 Entries: ${group.entries.length}`, 'info');
+                    
+                    // Store for export
+                    modelSizes[modelId] = group.totalSize;
+                    
+                    // Show all entries with full URLs
+                    group.entries.forEach(entry => {
+                        log(`   📦 ${entry.url}`, 'info');
+                        log(`      Size: ${entry.sizeMB} MB`, 'info');
+                    });
+                }
+                
+                log(`\n📊 Summary:`, 'success');
+                log(`   📦 Total models: ${Object.keys(modelGroups).length}`, 'info');
+                log(`   💾 Total size: ${(totalSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                log(`   📈 Average per model: ${(totalSize / Object.keys(modelGroups).length / 1024 / 1024).toFixed(2)} MB`, 'info');
+                
+                db.close();
+                
+                log(`\n✅ Model size calculation complete!`, 'success');
+                
+            } catch (error) {
+                log(`❌ Error calculating model sizes: ${error.message}`, 'error');
+            }
+        }
+
+        function exportResults() {
+            if (Object.keys(modelSizes).length === 0) {
+                log(`⚠️ No results to export. Run calculation first.`, 'warning');
+                return;
+            }
+            
+            log(`\n📤 Exporting model size results...`, 'info');
+            
+            // Create export data
+            const exportData = {
+                timestamp: new Date().toISOString(),
+                modelSizes: Object.entries(modelSizes).map(([modelId, sizeBytes]) => ({
+                    modelId,
+                    sizeBytes,
+                    sizeMB: (sizeBytes / 1024 / 1024).toFixed(2),
+                    sizeGB: (sizeBytes / 1024 / 1024 / 1024).toFixed(3)
+                })),
+                summary: {
+                    totalModels: Object.keys(modelSizes).length,
+                    totalSizeBytes: Object.values(modelSizes).reduce((sum, size) => sum + size, 0),
+                    averageSizeBytes: Object.values(modelSizes).reduce((sum, size) => sum + size, 0) / Object.keys(modelSizes).length
+                }
+            };
+            
+            // Convert to JSON and create download
+            const jsonStr = JSON.stringify(exportData, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `webllm-model-sizes-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            log(`✅ Exported ${exportData.modelSizes.length} model sizes to file`, 'success');
+            
+            // Also show in console for easy copying
+            console.log('WebLLM Model Sizes Export:', exportData);
+            
+            // Show JavaScript code for updating cache
+            log(`\n💻 JavaScript code to update model size cache:`, 'info');
+            log(`// Copy this code to update your model size cache`, 'warning');
+            exportData.modelSizes.forEach(model => {
+                log(`setCachedModelSizeFromWebLLM('${model.modelId}', ${model.sizeBytes});`, 'info');
+            });
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(calculateModelSizes, 1000);
+        });
+    </script>
+</body>
+</html>

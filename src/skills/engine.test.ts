@@ -158,8 +158,8 @@ The result is 4.`
     vi.mocked(mockPythonRuntime.execute).mockRejectedValue(new Error('Python error'))
     
     const result = await skillsEngine.executeSkill(
-      'calculator',
-      { expression: 'invalid' },
+      'python-coding',  // Use existing skill instead of calculator
+      { task: 'test task' },
       { pythonRuntime: mockPythonRuntime as any }
     )
     
@@ -178,25 +178,7 @@ The result is 4.`
     expect(result.error).toContain('Skill not found')
   })
 
-  it('should interpolate parameters into code', () => {
-    const code = 'print({{message}})'
-    const params = { message: 'Hello World' }
-    
-    // Access private method for testing
-    const interpolated = (skillsEngine as any).interpolateParams(code, params)
-    
-    expect(interpolated).toBe("print('Hello World')")
-  })
-
-  it('should handle JSON parameters in interpolation', () => {
-    const code = 'data = {{data}}'
-    const params = { data: [1, 2, 3] }
-    
-    const interpolated = (skillsEngine as any).interpolateParams(code, params)
-    
-    expect(interpolated).toBe('data = [1,2,3]')
-  })
-
+  
   it('should load skills metadata from storage on initialization', async () => {
     const mockStoredSkill: StoredSkill = {
       name: 'test-skill',

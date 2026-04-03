@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebLLM Official Models</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .model { margin: 10px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d3d9e2; border-color: #b3b9c7; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto; }
+        button { padding: 10px 15px; cursor: pointer; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🔍 WebLLM Official Models</h1>
+    <button onclick="loadWebLLMModels()">Load WebLLM Models</button>
+    <div id="results"></div>
+    
+    <script type="module">
+        const results = document.getElementById('results');
+        
+        window.loadWebLLMModels = async function() {
+            results.innerHTML = '<h2>🔍 Loading WebLLM Models...</h2>';
+            
+            try {
+                // Import WebLLM
+                const webllm = await import("@mlc-ai/web-llm");
+                
+                if (webllm.prebuiltAppConfig && webllm.prebuiltAppConfig.model_list) {
+                    const models = webllm.prebuiltAppConfig.model_list;
+                    
+                    results.innerHTML = `
+                        <h2>✅ Found ${models.length} Official WebLLM Models</h2>
+                        <p>These are the officially supported models from WebLLM's prebuiltAppConfig:</p>
+                    `;
+                    
+                    models.forEach((model, index) => {
+                        const modelDiv = document.createElement('div');
+                        modelDiv.className = 'model info';
+                        modelDiv.innerHTML = `
+                            <h3>🤖 ${index + 1}. ${model.model_id}</h3>
+                            <p><strong>Model URL:</strong> <code>${model.model}</code></p>
+                            <p><strong>WASM URL:</strong> <code>${model.model_lib}</code></p>
+                            <p><strong>VRAM Required:</strong> ${model.vram_required_MB || 'Unknown'} MB</p>
+                            <p><strong>Low Resource:</strong> ${model.low_resource_required || 'false'}</p>
+                            <p><strong>Required Features:</strong> ${model.required_features ? model.required_features.join(', ') : 'None'}</p>
+                            <p><strong>Overrides:</strong> ${model.overrides ? JSON.stringify(model.overrides) : 'None'}</p>
+                            <hr>
+                            <h4>Full Model Config:</h4>
+                            <pre>${JSON.stringify(model, null, 2)}</pre>
+                            <hr>
+                            <button onclick="testModelWASM('${model.model_id}', '${model.model_lib}')">Test WASM URL</button>
+                        `;
+                        results.appendChild(modelDiv);
+                    });
+                    
+                } else {
+                    results.innerHTML = '<div class="error">❌ No prebuiltAppConfig.model_list found in WebLLM</div>';
+                }
+                
+            } catch (error) {
+                results.innerHTML = `<div class="error">❌ Error loading WebLLM: ${error.message}</div>`;
+            }
+        };
+        
+        window.testModelWASM = async function(modelId, wasmUrl) {
+            const testDiv = document.createElement('div');
+            testDiv.className = 'model testing';
+            testDiv.innerHTML = `
+                <h3>🧪 Testing WASM for ${modelId}</h3>
+                <p><strong>URL:</strong> <code>${wasmUrl}</code></p>
+                <p><strong>Status:</strong> Testing...</p>
+            `;
+            results.appendChild(testDiv);
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch(wasmUrl, { method: 'HEAD' });
+                const endTime = Date.now();
+                
+                if (response.ok) {
+                    testDiv.className = 'model success';
+                    testDiv.innerHTML = `
+                        <h3>✅ WASM Accessible for ${modelId}</h3>
+                        <p><strong>URL:</strong> <code>${wasmUrl}</code></p>
+                        <p><strong>Status:</strong> ${response.status} ${response.statusText}</p>
+                        <p><strong>Time:</strong> ${endTime - startTime}ms</p>
+                        <p><strong>Size:</strong> ${response.headers.get('content-length') ? (parseInt(response.headers.get('content-length')) / 1024 / 1024).toFixed(2) + ' MB' : 'Unknown'}</p>
+                    `;
+                } else {
+                    testDiv.className = 'model error';
+                    testDiv.innerHTML = `
+                        <h3>❌ WASM Not Accessible for ${modelId}</h3>
+                        <p><strong>URL:</strong> <code>${wasmUrl}</code></p>
+                        <p><strong>Error:</strong> ${response.status} ${response.statusText}</p>
+                    `;
+                }
+            } catch (error) {
+                testDiv.className = 'model error';
+                testDiv.innerHTML = `
+                    <h3>❌ WASM Test Failed for ${modelId}</h3>
+                    <p><strong>URL:</strong> <code>${wasmUrl}</code></p>
+                    <p><strong>Error:</strong> ${error.message}</p>
+                `;
+            }
+        };
+        
+        // Auto-load on page load
+        window.addEventListener('load', () => {
+            setTimeout(loadWebLLMModels, 1000);
+        });
+    </script>
+</body>
+</html>

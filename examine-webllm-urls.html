@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebLLM URLs Table Inspector</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #fff; padding: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #007AFF; }
+        .warning { color: #ffa500; }
+        button { padding: 10px; margin: 5px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:hover { background: #555; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #333; }
+        .entry { margin: 10px 0; padding: 10px; border-left: 3px solid #007AFF; background: #111; }
+        .buffer-info { background: #1a1a1a; padding: 8px; margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <h1>🔍 WebLLM URLs Table Inspector</h1>
+    
+    <div class="section">
+        <button onclick="examineWebLLMUrls()">🔍 Examine WebLLM URLs Table</button>
+        <button onclick="clearOutput()">🗑️ Clear Output</button>
+        <button onclick="analyzeStorageQuota()">📊 Analyze Storage Quota</button>
+    </div>
+
+    <pre id="output"></pre>
+
+    <script>
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        function calculateSize(value) {
+            if (value === null || value === undefined) return 0;
+            
+            if (value instanceof ArrayBuffer) {
+                return value.byteLength;
+            }
+            
+            if (value instanceof Uint8Array || value instanceof Int8Array || 
+                value instanceof Uint16Array || value instanceof Int16Array ||
+                value instanceof Uint32Array || value instanceof Int32Array) {
+                return value.length * value.BYTES_PER_ELEMENT;
+            }
+            
+            if (typeof value === 'string') {
+                return value.length * 2;
+            }
+            
+            if (typeof value === 'number') {
+                return 8;
+            }
+            
+            if (typeof value === 'boolean') {
+                return 4;
+            }
+            
+            if (Array.isArray(value)) {
+                if (value.length > 100) {
+                    return value.length * 8; // Estimate
+                }
+                return value.reduce((sum, item) => sum + calculateSize(item), 0);
+            }
+            
+            if (typeof value === 'object') {
+                let size = 0;
+                
+                // Check for ArrayBuffer in buffer property
+                if (value.buffer && (value.buffer instanceof ArrayBuffer || value.buffer instanceof Uint8Array)) {
+                    return value.buffer.byteLength || value.buffer.length || 0;
+                }
+                
+                const keys = Object.keys(value);
+                for (let i = 0; i < Math.min(keys.length, 50); i++) {
+                    const key = keys[i];
+                    size += key.length * 2;
+                    size += calculateSize(value[key]);
+                }
+                return size;
+            }
+            
+            return 0;
+        }
+
+        async function examineWebLLMUrls() {
+            log("=== 🔍 EXAMINING WEBLLM URLS TABLE ===", 'info');
+            
+            try {
+                // Open the webllm database
+                const dbName = 'webllm';
+                const db = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open(dbName);
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => resolve(request.result);
+                    request.onupgradeneeded = (event) => {
+                        log(`⚠️ Database upgrade needed: ${event.newVersion}`, 'warning');
+                    };
+                });
+                
+                log(`✅ Opened webllm database`, 'success');
+                log(`   Version: ${db.version}`, 'info');
+                log(`   Object stores: ${Array.from(db.objectStoreNames).join(', ')}`, 'info');
+                
+                // Check if 'model' object store exists
+                if (!db.objectStoreNames.contains('model')) {
+                    log(`❌ No 'model' object store found`, 'error');
+                    db.close();
+                    return;
+                }
+                
+                log(`✅ Found 'model' object store`, 'success');
+                
+                // Open a transaction to access the model store
+                const transaction = db.transaction(['model'], 'readonly');
+                const modelStore = transaction.objectStore('model');
+                
+                // Check what indexes are available
+                log(`📋 Available indexes: ${Array.from(modelStore.indexNames).join(', ')}`, 'info');
+                
+                // Try to get all entries from the model store first
+                const getAllRequest = modelStore.getAll();
+                
+                getAllRequest.onsuccess = () => {
+                    const allEntries = getAllRequest.result;
+                    log(`📊 Total entries in model store: ${allEntries.length}`, 'info');
+                    
+                    // Look for entries that might contain URLs or buffers
+                    let urlEntries = [];
+                    let bufferEntries = [];
+                    
+                    allEntries.forEach((entry, index) => {
+                        const entrySize = calculateSize(entry);
+                        
+                        // Check if entry has URL-like properties
+                        if (entry.url || entry.key || typeof entry === 'string') {
+                            urlEntries.push({ index, entry, size: entrySize });
+                        }
+                        
+                        // Check if entry has buffer data
+                        if (entry.buffer && (entry.buffer instanceof ArrayBuffer || entry.buffer instanceof Uint8Array)) {
+                            bufferEntries.push({ index, entry, size: entrySize });
+                        }
+                    });
+                    
+                    log(`🎯 Found ${urlEntries.length} potential URL entries`, 'success');
+                    log(`🧬 Found ${bufferEntries.length} buffer entries`, 'success');
+                    
+                    // Display URL entries
+                    urlEntries.slice(0, 10).forEach(({ index, entry, size }) => {
+                        const url = entry.url || entry.key || entry;
+                        log(`📦 URL Entry ${index}:`, 'info');
+                        log(`   URL: ${typeof url === 'string' ? url.substring(0, 100) + (url.length > 100 ? '...' : '') : url}`, 'info');
+                        log(`   Size: ${(size / 1024 / 1024).toFixed(2)} MB`, 'info');
+                        log(`   Keys: ${Object.keys(entry).join(', ')}`, 'info');
+                    });
+                    
+                    // Display buffer entries
+                    bufferEntries.slice(0, 10).forEach(({ index, entry, size }) => {
+                        log(`🧬 Buffer Entry ${index}:`, 'info');
+                        log(`   Buffer Size: ${entry.buffer ? entry.buffer.byteLength || entry.buffer.length : 'N/A'} bytes`, 'info');
+                        log(`   Total Size: ${(size / 1024 / 1024).toFixed(2)} MB`, 'info');
+                        log(`   Keys: ${Object.keys(entry).join(', ')}`, 'info');
+                    });
+                    
+                    // Calculate total sizes
+                    const totalUrlSize = urlEntries.reduce((sum, { size }) => sum + size, 0);
+                    const totalBufferSize = bufferEntries.reduce((sum, { size }) => sum + size, 0);
+                    const totalSize = allEntries.reduce((sum, entry) => sum + calculateSize(entry), 0);
+                    
+                    log(`📊 Size Analysis:`, 'info');
+                    log(`   Total URL data: ${(totalUrlSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                    log(`   Total buffer data: ${(totalBufferSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                    log(`   Total all data: ${(totalSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                    
+                    db.close();
+                };
+                
+                getAllRequest.onerror = () => {
+                    log(`❌ Error getting all entries: ${getAllRequest.error}`, 'error');
+                    db.close();
+                };
+                
+            } catch (error) {
+                log(`❌ Error examining WebLLM URLs table: ${error.message}`, 'error');
+            }
+        }
+
+        async function analyzeStorageQuota() {
+            log("\n=== 📊 STORAGE QUOTA ANALYSIS ===", 'info');
+            
+            try {
+                if ('storage' in navigator && 'estimate' in navigator.storage) {
+                    const estimate = await navigator.storage.estimate();
+                    
+                    log("📊 Storage Quota Breakdown:", 'info');
+                    log(`   💾 Total Usage: ${formatBytes(estimate.usage || 0)}`, 'success');
+                    log(`   📦 Total Quota: ${formatBytes(estimate.quota || 0)}`, 'info');
+                    log(`   📊 Usage Percentage: ${((estimate.usage || 0) / (estimate.quota || 1) * 100).toFixed(2)}%`, 'info');
+                    
+                    if (estimate.usageDetails) {
+                        log("📋 Usage Details:", 'info');
+                        Object.entries(estimate.usageDetails).forEach(([type, size]) => {
+                            log(`   📦 ${type}: ${formatBytes(size)}`, 'info');
+                        });
+                    }
+                    
+                } else {
+                    log("⚠️ Storage estimate API not available", 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ Error analyzing storage quota: ${error.message}`, 'error');
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(examineWebLLMUrls, 1000);
+        });
+    </script>
+</body>
+</html>

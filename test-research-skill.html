@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Research Skill</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .result { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #e8f5e8; color: #2e7d32; }
+        .error { background: #ffebee; color: #c62828; }
+        .debug { background: #fff3e0; color: #ef6c00; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        textarea { width: 100%; height: 100px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Test Research Skill</h1>
+    
+    <div class="test-section">
+        <h2>Test Questions</h2>
+        <button onclick="testQuestion('what is the difference between cats and dogs?')">Test Cat/Dog Question</button>
+        <button onclick="testQuestion('how much does a cat weigh?')">Test Cat Weight Question</button>
+        <button onclick="testQuestion('calculate the volume of a cube with side 5')">Test Math Question</button>
+        <button onclick="testQuestion('write a python function to sort numbers')">Test Coding Question</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Custom Question</h2>
+        <textarea id="customQuestion" placeholder="Enter your question here..."></textarea>
+        <button onclick="testCustomQuestion()">Test Custom Question</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Results</h2>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'log') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            results.appendChild(div);
+            div.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        async function testQuestion(question) {
+            log(`Testing question: "${question}"`, 'debug');
+            
+            try {
+                // Simulate skill selection logic
+                const availableSkills = [
+                    'python-coding', 'data-analysis', 'research', 'quality-review', 
+                    'task-planning', 'execution-analyzer', 'knowledge-manager'
+                ];
+                
+                const taskLower = question.toLowerCase();
+                
+                // Enhanced research detection
+                const researchKeywords = ['research', 'find', 'search', 'investigate', 'lookup', 'information', 
+                                       'what is', 'what are', 'difference between', 'compare', 'versus', 'vs',
+                                       'how much', 'how many', 'when did', 'where is', 'who is', 'why does'];
+                const questionPatterns = ['what is the', 'what are the', 'difference between', 'how much', 
+                                           'how many', 'compare', 'versus', 'vs'];
+                
+                // Coding detection
+                const codingKeywords = ['write', 'code', 'function', 'script', 'program', 'algorithm', 
+                                     'python', 'javascript', 'calculate', 'compute', 'implement'];
+                
+                // Math detection
+                const mathKeywords = ['calculate', 'compute', 'volume', 'area', 'perimeter', 'sum', 'multiply'];
+                
+                let researchScore = 0.3;
+                let codingScore = 0.3;
+                let mathScore = 0.3;
+                
+                // Check for research patterns
+                if (questionPatterns.some(pattern => taskLower.includes(pattern))) {
+                    researchScore += 0.4;
+                }
+                if (researchKeywords.some(keyword => taskLower.includes(keyword))) {
+                    researchScore += 0.3;
+                }
+                
+                // Check for coding patterns
+                if (codingKeywords.some(keyword => taskLower.includes(keyword))) {
+                    codingScore += 0.5;
+                }
+                if (taskLower.includes('python') || taskLower.includes('javascript')) {
+                    codingScore += 0.3;
+                }
+                
+                // Check for math patterns
+                if (mathKeywords.some(keyword => taskLower.includes(keyword))) {
+                    mathScore += 0.4;
+                }
+                
+                // Determine selected skill
+                let selectedSkill = 'python-coding'; // default
+                let confidence = 0.5;
+                let reasoning = 'Default selection';
+                
+                if (researchScore > codingScore && researchScore > mathScore && researchScore > 0.7) {
+                    selectedSkill = 'research';
+                    confidence = researchScore;
+                    reasoning = 'Research task detected with high confidence';
+                } else if (codingScore > researchScore && codingScore > mathScore && codingScore > 0.6) {
+                    selectedSkill = 'python-coding';
+                    confidence = codingScore;
+                    reasoning = 'Coding task detected';
+                } else if (mathScore > 0.6) {
+                    selectedSkill = 'python-coding';
+                    confidence = mathScore;
+                    reasoning = 'Math calculation task detected';
+                }
+                
+                log(`Skill analysis:`, 'debug');
+                log(`  Research score: ${researchScore.toFixed(2)}`, 'debug');
+                log(`  Coding score: ${codingScore.toFixed(2)}`, 'debug');
+                log(`  Math score: ${mathScore.toFixed(2)}`, 'debug');
+                log(`  Selected: ${selectedSkill} (confidence: ${confidence.toFixed(2)})`, 
+                    selectedSkill === 'research' ? 'success' : 'error');
+                log(`  Reasoning: ${reasoning}`, 'debug');
+                
+                // Test if this is the expected behavior
+                const isResearchQuestion = question.includes('difference') || 
+                                         question.includes('how much') || 
+                                         question.includes('what is');
+                
+                const expectedSkill = isResearchQuestion ? 'research' : 'python-coding';
+                const status = selectedSkill === expectedSkill ? '✅ CORRECT' : '❌ INCORRECT';
+                
+                log(`Expected: ${expectedSkill}, Got: ${selectedSkill} - ${status}`, 
+                    selectedSkill === expectedSkill ? 'success' : 'error');
+                
+                // Simulate what the research skill would return
+                if (selectedSkill === 'research') {
+                    log(`Research skill would provide direct answer:`, 'success');
+                    if (question.includes('cats and dogs')) {
+                        log(`  → Cats typically weigh 8-10 lbs, dogs vary widely by breed (5-200+ lbs)`, 'success');
+                    } else if (question.includes('cat weigh')) {
+                        log(`  → Domestic cats typically weigh 8-10 pounds (3.6-4.5 kg)`, 'success');
+                    }
+                } else {
+                    log(`Python-coding skill would generate code artifact:`, 'debug');
+                }
+                
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testCustomQuestion() {
+            const question = document.getElementById('customQuestion').value.trim();
+            if (question) {
+                testQuestion(question);
+            } else {
+                log('Please enter a question first', 'error');
+            }
+        }
+
+        // Auto-test the cat/dog question on page load
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                log('🚀 Auto-testing skill selection...', 'debug');
+                testQuestion('what is the difference between cats and dogs?');
+            }, 1000);
+        });
+    </script>
+</body>
+</html>

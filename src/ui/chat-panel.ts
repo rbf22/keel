@@ -1,4 +1,4 @@
-import { SUPPORTED_MODELS } from "../llm";
+import { getSortedModelList } from "../llm/models";
 
 export class ChatPanel {
   private messagesEl: HTMLElement;
@@ -57,7 +57,7 @@ export class ChatPanel {
     }
   }
 
-  updateCachedModels(cachedModelIds: string[]) {
+  async updateCachedModels(cachedModelIds: string[]) {
     const currentVal = this.modelSelect.value;
     
     if (cachedModelIds.length === 0) {
@@ -67,8 +67,9 @@ export class ChatPanel {
       return;
     }
 
+    const supportedModels = await getSortedModelList();
     const options = cachedModelIds.map(id => {
-      const model = SUPPORTED_MODELS.find(m => m.modelId === id);
+      const model = supportedModels.find(m => m.modelId === id);
       return `<option value="${id}">${model?.displayName || id}</option>`;
     });
 

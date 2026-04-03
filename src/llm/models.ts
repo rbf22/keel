@@ -1,9 +1,9 @@
 import * as webllm from "@mlc-ai/web-llm";
 import { logger } from "../logger";
-import { MODEL_VRAM_THRESHOLDS } from "../constants";
+import { keelModelConfig } from "./keel-model-config";
 
-// Default model ID - using SmolLM2 as it's the smallest and most compatible
-export const DEFAULT_MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+// Default model ID - will be set dynamically
+export const DEFAULT_MODEL_ID = "";
 
 export interface ModelInfo {
   modelId: string;
@@ -19,220 +19,227 @@ export interface ModelInfo {
   };
 }
 
-// Custom model configuration to handle potential fetch failures from default CDNs
-export const CUSTOM_MODEL_LIST: (webllm.ModelRecord & { recommended_config?: ModelInfo['recommendedConfig'] })[] = [
-  {
-    model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
-    model: "https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 376.06,
-    low_resource_required: true,
-    required_features: ["shader-f16"],
-    recommended_config: {
-      temperature: 0.7,
-      top_p: 0.9,
-      repetition_penalty: 1.0
-    }
-  },
-  {
-    model_id: "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC", 
-    model: "https://huggingface.co/mlc-ai/TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/TinyLlama-1.1B-Chat-v0.4-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 0,
-    required_features: [],
-    recommended_config: {
-      temperature: 0.7,
-      top_p: 0.9,
-      repetition_penalty: 1.0
-    }
-  },
-  {
-    model_id: "SmolLM2-135M-Instruct-q0f16-MLC",
-    model: "https://huggingface.co/mlc-ai/SmolLM2-135M-Instruct-q0f16-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/SmolLM2-135M-Instruct-q0f16-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 0,
-    low_resource_required: true,
-    required_features: ["shader-f16"],
-    overrides: {
-      context_window_size: 4096,
-    },
-    recommended_config: {
-      temperature: 0.7,
-      top_p: 0.9,
-      repetition_penalty: 1.0
-    }
-  },
-  {
-    model_id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-    model: "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 879.04,
-    low_resource_required: true,
-    required_features: ["shader-f16"],
-    overrides: {
-      context_window_size: 4096,
-    },
-    recommended_config: {
-      temperature: 0.6,
-      top_p: 0.9,
-    }
-  },
-  {
-    model_id: "Llama-3.2-1B-Instruct-q4f32_1-MLC",
-    model: "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f32_1-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-1B-Instruct-q4f32_1-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 1700.00,
-    low_resource_required: true,
-    overrides: {
-      context_window_size: 4096,
-    },
-    recommended_config: {
-      temperature: 0.6,
-      top_p: 0.9,
-    }
-  },
-  {
-    model_id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
-    model: "https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC/resolve/main/",
-    model_lib: webllm.modelLibURLPrefix + webllm.modelVersion + "/Llama-3.2-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-    vram_required_MB: 2263.69,
-    low_resource_required: true,
-    required_features: ["shader-f16"],
-    overrides: {
-      context_window_size: 4096,
-    },
-    recommended_config: {
-      temperature: 0.6,
-      top_p: 0.9,
-    }
-  },
-];
-
-export const CUSTOM_APP_CONFIG: webllm.AppConfig = {
-  ...webllm.prebuiltAppConfig,
-  model_list: [
-    ...webllm.prebuiltAppConfig.model_list.filter(m => !CUSTOM_MODEL_LIST.some(cm => cm.model_id === m.model_id)),
-    ...CUSTOM_MODEL_LIST
-  ],
-  useIndexedDBCache: true,
-};
-
-// Map our custom models to the ModelInfo format for the UI
-export const SUPPORTED_MODELS: ModelInfo[] = CUSTOM_MODEL_LIST.map(m => ({
-  modelId: m.model_id,
-  displayName: m.model_id.split('-MLC')[0].replace(/-/g, ' '),
-  vramRequiredMB: m.vram_required_MB,
-  requiredFeatures: m.required_features,
-  recommendedConfig: m.recommended_config || {
-    temperature: 0.7,
-    top_p: 0.9,
-    repetition_penalty: 1.0,
-    presence_penalty: 0.0,
-    frequency_penalty: 0.0
-  }
-}));
-
-// Cache sorted model list for performance
-let sortedModelList: typeof SUPPORTED_MODELS | null = null;
-
-export function getSortedModelList(): typeof SUPPORTED_MODELS {
-  if (!sortedModelList) {
-    sortedModelList = [...SUPPORTED_MODELS].sort((a, b) => 
-      (b.vramRequiredMB || 0) - (a.vramRequiredMB || 0)
-    );
-  }
-  return sortedModelList;
+// Dynamic model discovery from MLC repository
+export interface MLCModel {
+  modelId: string;
+  modelLib: string;
+  modelUrl: string;
+  size: number;
+  version: string;
+  available: boolean;
+  lastChecked?: Date;
 }
 
+// Cache for discovered models
+let discoveredModels: MLCModel[] | null = null;
+let modelsCacheExpiry = 0;
+const MODELS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// Fetch available models from MLC repository
+export async function discoverMLCModels(): Promise<MLCModel[]> {
+  const now = Date.now();
+  
+  // Return cached models if still valid
+  if (discoveredModels && now < modelsCacheExpiry) {
+    logger.info('llm', 'Using cached model list');
+    return discoveredModels;
+  }
+  
+  logger.info('llm', 'Discovering models from MLC repository');
+  
+  try {
+    // Get latest version
+    const versionsResponse = await fetch('https://api.github.com/repos/mlc-ai/binary-mlc-llm-libs/contents/web-llm-models');
+    if (!versionsResponse.ok) {
+      throw new Error(`Failed to fetch versions: ${versionsResponse.status}`);
+    }
+    
+    const versions = await versionsResponse.json();
+    const versionDirs = versions
+      .filter((item: any) => item.type === 'dir' && item.name.match(/^v\d_\d_\d+$/))
+      .sort((a: any, b: any) => b.name.localeCompare(a.name));
+    
+    if (versionDirs.length === 0) {
+      throw new Error('No valid versions found');
+    }
+    
+    const latestVersion = versionDirs[0].name;
+    logger.info('llm', `Using latest version: ${latestVersion}`);
+    
+    // Get WASM files in latest version
+    const wasmResponse = await fetch(`https://api.github.com/repos/mlc-ai/binary-mlc-llm-libs/contents/web-llm-models/${latestVersion}`);
+    if (!wasmResponse.ok) {
+      throw new Error(`Failed to fetch WASM files: ${wasmResponse.status}`);
+    }
+    
+    const wasmFiles = await wasmResponse.json();
+    const models: MLCModel[] = [];
+    
+    // Process each WASM file
+    for (const file of wasmFiles) {
+      if (file.type === 'file' && file.name.endsWith('.wasm')) {
+        const modelId = file.name.replace('.wasm', '');
+        const modelLib = `https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/${latestVersion}/${file.name}`;
+        const modelUrl = `https://huggingface.co/mlc-ai/${modelId}/resolve/main/`;
+        
+        // Test if WASM is accessible
+        let available = false;
+        try {
+          const wasmTestResponse = await fetch(modelLib, { method: 'HEAD' });
+          available = wasmTestResponse.ok;
+        } catch (error) {
+          logger.warn('llm', `WASM not accessible for ${modelId}`, { error: error instanceof Error ? error.message : String(error) });
+        }
+        
+        models.push({
+          modelId,
+          modelLib,
+          modelUrl,
+          size: file.size,
+          version: latestVersion,
+          available,
+          lastChecked: new Date()
+        });
+      }
+    }
+    
+    // Cache the results
+    discoveredModels = models;
+    modelsCacheExpiry = now + MODELS_CACHE_TTL;
+    
+    logger.info('llm', `Discovered ${models.length} models, ${models.filter(m => m.available).length} available`);
+    return models;
+    
+  } catch (error) {
+    logger.error('llm', 'Failed to discover models', { error: error instanceof Error ? error.message : String(error) });
+    
+    // Return fallback models if discovery fails
+    return getFallbackModels();
+  }
+}
+
+// Fallback models if dynamic discovery fails
+function getFallbackModels(): MLCModel[] {
+  return [
+    // Generic fallback - will be replaced by actual discovered models
+  ];
+}
+
+// Convert MLC models to WebLLM format
+export function mlcToWebLLMModels(mlcModels: MLCModel[]): webllm.ModelRecord[] {
+  return mlcModels
+    .filter(model => model.available)
+    .map(model => ({
+      model_id: model.modelId,
+      model: model.modelUrl,
+      model_lib: model.modelLib,
+      vram_required_MB: Math.round(model.size / 1024 / 1024 * 2), // Estimate VRAM as 2x WASM size
+      required_features: [],
+      overrides: {
+        context_window_size: 4096
+      }
+    }));
+}
+
+// Get dynamic model list for WebLLM
+export async function getDynamicModelList(): Promise<webllm.ModelRecord[]> {
+  const mlcModels = await discoverMLCModels();
+  return mlcToWebLLMModels(mlcModels);
+}
+
+// Get hardcoded model configuration for Keel
+export async function getDynamicAppConfig(): Promise<webllm.AppConfig> {
+  try {
+    // Use our hardcoded configuration instead of dynamic discovery
+    return {
+      ...keelModelConfig,
+      useIndexedDBCache: true,
+    };
+  } catch (error) {
+    logger.error('llm', 'Failed to get keel model config', { error: error instanceof Error ? error.message : String(error) });
+    
+    // Fallback to basic config
+    const webllm = await import("@mlc-ai/web-llm");
+    return {
+      ...webllm.prebuiltAppConfig,
+      useIndexedDBCache: true,
+    };
+  }
+}
+
+// Convert hardcoded models to UI format
+export async function getSupportedModels(): Promise<ModelInfo[]> {
+  try {
+    // Use our hardcoded configuration instead of dynamic discovery
+    return keelModelConfig.model_list
+      .map(model => ({
+        modelId: model.model_id,
+        displayName: model.model_id.split('-ctx')[0].replace(/-/g, ' '),
+        vramRequiredMB: model.vram_required_MB,
+        requiredFeatures: model.required_features || [],
+        recommendedConfig: {
+          temperature: 0.7,
+          top_p: 0.9,
+          repetition_penalty: 1.0,
+          presence_penalty: 0.0,
+          frequency_penalty: 0.0
+        }
+      }));
+  } catch (error) {
+    logger.error('llm', 'Failed to get supported models', { error: error instanceof Error ? error.message : String(error) });
+    return [];
+  }
+}
+
+// Get sorted list of dynamic models
+export async function getSortedModelList(): Promise<ModelInfo[]> {
+  const models = await getSupportedModels();
+  return models.sort((a, b) => (b.vramRequiredMB || 0) - (a.vramRequiredMB || 0));
+}
+
+// Detect best model from hardcoded models
 export async function detectBestModel(): Promise<string> {
   logger.info('llm', 'Starting best model detection');
   try {
+    // Use our hardcoded configuration instead of dynamic discovery
+    const models = keelModelConfig.model_list
+      .filter(model => model.low_resource_required)
+      .sort((a, b) => (a.vram_required_MB || 0) - (b.vram_required_MB || 0));
+    
+    if (models.length === 0) {
+      logger.warn('llm', 'No models available, using fallback');
+      return 'SmolLM2-360M-Instruct-q4f16_1-MLC'; // Known good fallback
+    }
+    
     const memory = (navigator as any).deviceMemory; // in GB
     const gpu = (navigator as any).gpu;
     if (!gpu) {
-      logger.warn('llm', 'No GPU available, using default model');
-      return DEFAULT_MODEL_ID;
+      logger.warn('llm', 'No GPU available, using smallest model');
+      return models[0].model_id; // Smallest model
     }
-
-    const adapter = await gpu.requestAdapter();
-    if (!adapter) {
-      logger.warn('llm', 'GPU adapter not found, using default model');
-      return DEFAULT_MODEL_ID;
-    }
-
-    const hasShaderF16 = adapter.features.has("shader-f16");
-    const limits = adapter.limits;
     
-    logger.debug('llm', 'GPU capabilities detected', {
-      deviceMemoryGB: memory,
-      adapterInfo: (adapter as any).info || 'Unknown',
-      hasShaderF16,
-      maxStorageBufferBindingSize: limits.maxStorageBufferBindingSize
-    });
+    // Choose model based on available memory
+    let bestModel = models[0].model_id; // Default to smallest
     
-    // Heuristic for available VRAM: often maxStorageBufferBindingSize is a good indicator
-    // but not always the whole picture. 
-    const maxBufferMB = limits.maxStorageBufferBindingSize / (1024 * 1024);
-
-    // Get cached sorted models by VRAM requirement (descending) to find the best fit
-    const candidates = getSortedModelList();
-
-    for (const model of candidates) {
-      // Check feature requirements
-      if (model.requiredFeatures?.includes("shader-f16") && !hasShaderF16) {
-        logger.debug('llm', 'Skipping model due to missing shader-f16 feature', { 
-          modelId: model.modelId 
-        });
-        continue;
+    if (memory && memory >= 8) {
+      // 8GB+ RAM, can handle larger models
+      const largeModels = models.filter(m => (m.vram_required_MB || 0) <= 2000);
+      if (largeModels.length > 0) {
+        bestModel = largeModels[largeModels.length - 1].model_id; // Largest that fits
       }
-
-      // Check VRAM requirements
-      const vramLimit = model.vramRequiredMB || 0;
-      
-      logger.debug('llm', 'Evaluating model', { 
-        modelId: model.modelId,
-        vramRequiredMB: vramLimit,
-        maxBufferMB
-      });
-      
-      if (memory && memory >= MODEL_VRAM_THRESHOLDS.HIGH_MEMORY_THRESHOLD && vramLimit > MODEL_VRAM_THRESHOLDS.MEDIUM_MODEL) {
-        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.HIGH_BUFFER_SIZE) {
-          logger.info('llm', 'Selected high-memory model', { 
-            modelId: model.modelId,
-            systemMemoryGB: memory,
-            vramRequiredMB: vramLimit
-          });
-          return model.modelId;
-        }
-      }
-      
-      if (memory && memory >= MODEL_VRAM_THRESHOLDS.MEDIUM_MEMORY_THRESHOLD && vramLimit > MODEL_VRAM_THRESHOLDS.SMALL_MODEL) {
-        if (maxBufferMB >= MODEL_VRAM_THRESHOLDS.MEDIUM_BUFFER_SIZE) {
-          logger.info('llm', 'Selected medium-memory model', { 
-            modelId: model.modelId,
-            systemMemoryGB: memory,
-            vramRequiredMB: vramLimit
-          });
-          return model.modelId;
-        }
-      }
-
-      // If it's a very small model (like SmolLM 360M), just check shader support
-      if (vramLimit < MODEL_VRAM_THRESHOLDS.SMALL_MODEL) {
-        logger.info('llm', 'Selected small model', { 
-          modelId: model.modelId,
-          vramRequiredMB: vramLimit
-        });
-        return model.modelId;
+    } else if (memory && memory >= 4) {
+      // 4-8GB RAM, medium models
+      const mediumModels = models.filter(m => (m.vram_required_MB || 0) <= 1000);
+      if (mediumModels.length > 0) {
+        bestModel = mediumModels[mediumModels.length - 1].model_id;
       }
     }
-
-    logger.warn('llm', 'No suitable model found, using default', { 
-      defaultModel: DEFAULT_MODEL_ID 
-    });
-    return DEFAULT_MODEL_ID;
-  } catch (e) {
-    logger.warn("llm", "Error detect best model, falling back to default", { error: e });
-    return DEFAULT_MODEL_ID;
+    
+    logger.info('llm', `Selected best model: ${bestModel}`);
+    return bestModel;
+    
+  } catch (error) {
+    logger.error('llm', 'Best model detection failed', { error: error instanceof Error ? error.message : String(error) });
+    return 'SmolLM2-360M-Instruct-q4f16_1-MLC'; // Known good fallback
   }
 }

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Direct Skill Test</title>
+    <style>
+        body { font-family: monospace; margin: 20px; }
+        .debug { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+        .success { color: green; }
+        .error { color: red; }
+        button { padding: 10px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Direct Skill Test</h1>
+    <button onclick="testDirectSkill()">Test Skill Selector Directly</button>
+    <button onclick="clearOutput()">Clear</button>
+    <div id="output"></div>
+
+    <script>
+        function log(message, type = 'debug') {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = `debug ${type}`;
+            div.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            output.appendChild(div);
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        async function testDirectSkill() {
+            log('🔍 Testing skill selector directly via SkillsEngine...', 'info');
+            
+            try {
+                // Access the skills engine from the window object
+                if (!window.skillsEngine) {
+                    log('❌ SkillsEngine not found on window object', 'error');
+                    return;
+                }
+                
+                const task = "what is the difference between cats and dogs?";
+                log(`Task: "${task}"`, 'info');
+                
+                // Execute skill-selector directly
+                log('Executing skill-selector...', 'info');
+                const result = await window.skillsEngine.executeSkill('skill-selector', { task: task });
+                
+                log(`✅ Skill selector executed successfully`, 'success');
+                log(`Output length: ${result.output.length} characters`, 'info');
+                log(`Output preview: ${result.output.substring(0, 300)}...`, 'info');
+                
+                // Try to parse the JSON
+                try {
+                    const parsed = JSON.parse(result.output);
+                    log('✅ JSON parsed successfully', 'success');
+                    
+                    if (parsed.selected_skills && parsed.selected_skills.length > 0) {
+                        const primarySkill = parsed.selected_skills[0];
+                        log(`🏆 Primary skill: ${primarySkill.skill}`, 'success');
+                        log(`Confidence: ${primarySkill.confidence}`, 'info');
+                        log(`Reasoning: ${primarySkill.reasoning}`, 'info');
+                        
+                        if (primarySkill.skill === 'research') {
+                            log('✅ SUCCESS: Research skill selected correctly!', 'success');
+                        } else {
+                            log(`❌ FAILURE: Expected "research" but got "${primarySkill.skill}"`, 'error');
+                        }
+                    } else {
+                        log('❌ No selected skills found in output', 'error');
+                        log(`Full output: ${JSON.stringify(parsed, null, 2)}`, 'error');
+                    }
+                } catch (parseError) {
+                    log(`❌ JSON parse error: ${parseError.message}`, 'error');
+                    log(`Raw output: ${result.output}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`❌ Error executing skill: ${error.message}`, 'error');
+                console.error('Full error:', error);
+            }
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(testDirectSkill, 1000);
+        });
+    </script>
+</body>
+</html>

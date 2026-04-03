@@ -10,46 +10,58 @@ vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
   };
 })
 
-import { CUSTOM_MODEL_LIST, CUSTOM_APP_CONFIG, SUPPORTED_MODELS } from '../llm/models'
+// Mock fetch for GitHub API
+vi.mock('global.fetch', () => {
+  return vi.fn(() => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve([
+      { name: 'v0_2_80', type: 'dir' },
+      { name: 'SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm', type: 'file', size: 5900000 },
+      { name: 'Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm', type: 'file', size: 5500000 }
+    ])
+  }))
+})
 
-describe('LLM Diagnostic Configuration', () => {
-  it('should have valid-looking Hugging Face URLs', () => {
-    CUSTOM_MODEL_LIST.forEach(m => {
+import { getDynamicModelList, getDynamicAppConfig, getSupportedModels } from '../llm/models'
+
+describe('LLM Dynamic Configuration', () => {
+  it('should discover models from GitHub API', async () => {
+    const models = await getDynamicModelList()
+    expect(models.length).toBeGreaterThan(0)
+    
+    models.forEach(m => {
+      expect(m.model_id).toBeDefined()
       expect(m.model).toContain('https://huggingface.co/mlc-ai/')
-      expect(m.model).toContain('/resolve/main/')
+      expect(m.model_lib).toContain('raw.githubusercontent.com')
+      expect(m.model_lib).toContain('.wasm')
     })
   })
 
-  it('should have custom model list with valid dynamic URLs', () => {
-    expect(CUSTOM_MODEL_LIST.length).toBe(6)
+  it('should create dynamic app config', async () => {
+    const config = await getDynamicAppConfig()
+    expect(config.model_list).toBeDefined()
+    expect(config.useIndexedDBCache).toBe(true)
     
-    CUSTOM_MODEL_LIST.forEach(m => {
-      // Verify WASM URL construction
-      expect(m.model_lib).toContain(webllm.modelLibURLPrefix)
-      expect(m.model_lib).toContain(webllm.modelVersion)
-      expect(m.model_lib).toContain('-ctx4k_cs1k-webgpu.wasm')
-    })
+    // Should include WebLLM defaults plus discovered models
+    expect(config.model_list.length).toBeGreaterThan(0)
   })
 
-  it('should merge CUSTOM_MODEL_LIST into CUSTOM_APP_CONFIG', () => {
-    expect(CUSTOM_APP_CONFIG.model_list).toBeDefined()
+  it('should provide supported models for UI', async () => {
+    const models = await getSupportedModels()
+    expect(models.length).toBeGreaterThan(0)
     
-    // Check that our specific models are in the final app config
-    CUSTOM_MODEL_LIST.forEach(customModel => {
-      const found = CUSTOM_APP_CONFIG.model_list.find(m => m.model_id === customModel.model_id)
-      expect(found).toBeDefined()
-      expect(found?.model).toBe(customModel.model)
-      expect(found?.model_lib).toBe(customModel.model_lib)
+    models.forEach(m => {
+      expect(m.modelId).toBeDefined()
+      expect(m.displayName).toBeDefined()
+      expect(m.vramRequiredMB).toBeGreaterThan(0)
+      expect(m.recommendedConfig).toBeDefined()
     })
   })
 
-  it('should enable IndexedDB cache for reliability', () => {
-    expect(CUSTOM_APP_CONFIG.useIndexedDBCache).toBe(true)
-  })
-
-  it('should list exact URLs for user inspection in logs', () => {
-    console.log('\n--- DIAGNOSTIC: CURRENT MODEL URLs ---')
-    CUSTOM_MODEL_LIST.forEach(m => {
+  it('should list discovered URLs for inspection', async () => {
+    const models = await getDynamicModelList()
+    console.log('\n--- DIAGNOSTIC: DISCOVERED MODEL URLs ---')
+    models.forEach(m => {
       console.log(`Model ID: ${m.model_id}`)
       console.log(`Weights:  ${m.model}`)
       console.log(`WASM:     ${m.model_lib}`)

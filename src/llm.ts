@@ -1,27 +1,25 @@
 import * as webllm from "@mlc-ai/web-llm";
 import { logger } from "./logger";
 import { 
-  LLM_GENERATION_DELAY,
   LLM_ENGINE_INIT_TIMEOUT,
-  LLM_ABSOLUTE_TIMEOUT
+  LLM_ABSOLUTE_TIMEOUT,
+  LLM_GENERATION_DELAY
 } from "./constants";
 import { 
-  CUSTOM_APP_CONFIG, 
-  CUSTOM_MODEL_LIST
+  getDynamicAppConfig
 } from "./llm/models";
 import { 
-  getCachedModelSizeFromWebLLM, 
-  setCachedModelSizeFromWebLLM, 
-  getIndexedDBSizeStatic,
-  getAllCachedModels as getAllCachedModelsStatic,
   clearAllCachedModels as clearAllCachedModelsStatic,
+  clearCachedModel as clearCachedModelStatic,
+  getAllCachedModels as getAllCachedModelsStatic,
+  getIndexedDBSizeStatic,
+  getCachedModelSizeFromWebLLM,
   registerDownload,
   updateDownloadProgress,
-  unregisterDownload
+  unregisterDownload,
+  setCachedModelSizeFromWebLLM
 } from "./llm/cache";
 import { skillsEngine } from "./skills/engine";
-
-export { SUPPORTED_MODELS, detectBestModel } from "./llm/models";
 
 export async function checkWebGPU() {
   logger.debug('llm', 'Checking WebGPU support');
@@ -146,12 +144,79 @@ export class LocalLLMEngine implements ILLMEngine {
       }
 
       const databases = await indexedDB.databases();
-      const exists = databases.some(db => db.name === `webllm:${this.modelId}`);
-      logger.debug("llm", "[CACHE] Database check result", { modelId: this.modelId, exists });
-      return exists;
+      
+      // First check if webllm/model database exists (where actual model data is stored)
+      const hasModelDb = databases.some(db => db.name === 'webllm/model');
+      if (!hasModelDb) {
+        logger.debug("llm", "[CACHE] No webllm/model database found", { modelId: this.modelId });
+        return false;
+      }
+      
+      // Check if this specific model has entries in webllm/model
+      try {
+        const modelDb = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('webllm/model');
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+        });
+        
+        const transaction = modelDb.transaction(['urls'], 'readonly');
+        const store = transaction.objectStore('urls');
+        
+        // Use cursor to check if any entries match this model
+        const hasEntries = await new Promise<boolean>((resolve, reject) => {
+          const modelSearchTerm = this.modelId.replace('-MLC', '');
+          let found = false;
+          
+          const request = store.openCursor();
+          request.onsuccess = (event) => {
+            const cursor = (event.target as IDBRequest).result;
+            if (cursor && !found) {
+              const entry = cursor.value;
+              const url = entry.url || '';
+              
+              if (url.includes(modelSearchTerm)) {
+                found = true;
+                resolve(true);
+                return;
+              }
+              
+              cursor.continue();
+            } else {
+              resolve(found);
+            }
+          };
+          
+          request.onerror = () => reject(request.error);
+        });
+        
+        modelDb.close();
+        
+        logger.debug("llm", "[CACHE] Model entries check result", { 
+          modelId: this.modelId, 
+          hasEntries 
+        });
+        
+        return hasEntries;
+        
+      } catch (error) {
+        logger.warn("llm", "[CACHE] Error checking webllm/model database", { 
+          modelId: this.modelId, 
+          error: error instanceof Error ? error.message : String(error)
+        });
+        
+        // Fallback to checking legacy database name
+        const exists = databases.some(db => db.name === `webllm:${this.modelId}`);
+        logger.debug("llm", "[CACHE] Fallback database check result", { modelId: this.modelId, exists });
+        return exists;
+      }
+      
     } catch (error) {
-      logger.error("llm", "[CACHE] Cache check failed", { error });
-      return false;
+        logger.error("llm", "[CACHE] Cache check failed", { 
+          modelId: this.modelId, 
+          error: error instanceof Error ? error.message : String(error)
+        });
+        return false;
     }
   }
 
@@ -189,6 +254,11 @@ export class LocalLLMEngine implements ILLMEngine {
   // Clear all cached models from IndexedDB
   static async clearAllCachedModels(): Promise<void> {
     return clearAllCachedModelsStatic();
+  }
+
+  // Delete a specific cached model from IndexedDB
+  static async deleteCachedModel(modelId: string): Promise<void> {
+    return clearCachedModelStatic(modelId);
   }
 
   // Get all cached models info from IndexedDB
@@ -237,9 +307,12 @@ export class LocalLLMEngine implements ILLMEngine {
       }
     }
     
+    // Get dynamic app config with discovered models
+    const appConfig = await getDynamicAppConfig();
+    
     // Check if model exists in our config
     logger.debug("llm", "Checking if model exists in config", { modelId: this.modelId });
-    const modelInConfig = CUSTOM_APP_CONFIG.model_list.find(m => m.model_id === this.modelId);
+    const modelInConfig = appConfig.model_list.find(m => m.model_id === this.modelId);
     if (!modelInConfig) {
       throw new Error(`Model ${this.modelId} not found in app config`);
     }
@@ -262,7 +335,7 @@ export class LocalLLMEngine implements ILLMEngine {
     }
 
     const engineConfig: webllm.MLCEngineConfig = {
-      appConfig: CUSTOM_APP_CONFIG,
+      appConfig: appConfig,
       initProgressCallback: (report: webllm.InitProgressReport) => {
         logger.info("llm", "Init progress", { text: report.text, progress: report.progress });
         this.onUpdate(`Loading: ${report.text}`);
@@ -394,20 +467,19 @@ export class LocalLLMEngine implements ILLMEngine {
       { role: "user", content: prompt },
     ];
 
-    const config = CUSTOM_MODEL_LIST.find(m => m.model_id === this.modelId);
-    
     logger.info("llm", "Starting local generation (SW)", { 
       messageCount: messages.length,
       systemPromptLength: systemPrompt.length,
-      modelConfig: config?.recommended_config
+      modelId: this.modelId
     });
     const startTime = performance.now();
 
     try {
       const result = await this.engine.chat.completions.create({
         messages,
-        stream: true,
-        ...config?.recommended_config
+        temperature: 0.7,
+        top_p: 0.9,
+        max_tokens: 1024,
       });
 
       // result is an AsyncIterable when stream is true

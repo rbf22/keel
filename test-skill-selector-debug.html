@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skill Selector Debug Test</title>
+    <style>
+        body { font-family: monospace; margin: 20px; }
+        .debug { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+        .success { color: green; }
+        .error { color: red; }
+        button { padding: 10px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Skill Selector Debug Test</h1>
+    <button onclick="testSkillSelector()">Test Skill Selector</button>
+    <button onclick="clearOutput()">Clear</button>
+    <div id="output"></div>
+
+    <script>
+        function log(message, type = 'debug') {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = `debug ${type}`;
+            div.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            output.appendChild(div);
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        async function testSkillSelector() {
+            log('🔍 Testing skill selector directly...', 'info');
+            
+            try {
+                // Simulate the skill selector logic with debug
+                const task = "what is the difference between cats and dogs?";
+                const availableSkills = [
+                    'analyze-data', 'data-analysis', 'execution-analyzer', 'knowledge-manager',
+                    'parameter-analyzer', 'python-coding', 'quality-review', 'research', 
+                    'skill-selector', 'task-planning'
+                ];
+                
+                log(`Task: "${task}"`, 'info');
+                log(`Available skills: ${availableSkills.join(', ')}`, 'info');
+                
+                const taskLower = task.toLowerCase();
+                
+                // Test research skill scoring
+                let researchScore = 0.3;  // Base score
+                const researchKeywords = ['research', 'find', 'search', 'investigate', 'lookup', 'information', 
+                                       'what is', 'what are', 'difference between', 'compare', 'versus', 'vs',
+                                       'how much', 'how many', 'when did', 'where is', 'who is', 'why does'];
+                const questionPatterns = ['what is the', 'what are the', 'difference between', 'how much', 
+                                           'how many', 'compare', 'versus', 'vs'];
+                
+                log(`Research skill analysis:`, 'info');
+                
+                // Check for question patterns
+                const patternMatches = questionPatterns.filter(pattern => taskLower.includes(pattern));
+                if (patternMatches.length > 0) {
+                    researchScore += 0.5;
+                    log(`  ✅ Question patterns matched: ${patternMatches.join(', ')}`, 'success');
+                } else {
+                    log(`  ❌ No question patterns matched`, 'error');
+                }
+                
+                // Check for research keywords
+                const keywordMatches = researchKeywords.filter(word => taskLower.includes(word));
+                if (keywordMatches.length > 0) {
+                    researchScore += 0.3;
+                    log(`  ✅ Research keywords matched: ${keywordMatches.slice(0, 5).join(', ')}`, 'success');
+                } else {
+                    log(`  ❌ No research keywords matched`, 'error');
+                }
+                
+                // General knowledge questions
+                if (taskLower.startsWith('what') || taskLower.startsWith('how') || taskLower.startsWith('when')) {
+                    researchScore += 0.2;
+                    log(`  ✅ General knowledge question pattern detected`, 'success');
+                } else {
+                    log(`  ❌ No general knowledge pattern detected`, 'error');
+                }
+                
+                log(`Final research score: ${researchScore.toFixed(2)}`, researchScore > 0.5 ? 'success' : 'error');
+                
+                // Test python-coding skill scoring (for comparison)
+                let codingScore = 0.3;
+                const codingKeywords = ['code', 'python', 'program', 'script', 'function', 'calculate', 'compute', 'implement'];
+                const mathKeywords = ['calculate', 'compute', 'multiply', 'divide', 'add'];
+                
+                log(`Python-coding skill analysis:`, 'info');
+                
+                if (codingKeywords.some(word => taskLower.includes(word))) {
+                    codingScore += 0.3;
+                    log(`  ✅ Coding keywords detected`, 'success');
+                } else {
+                    log(`  ❌ No coding keywords detected`, 'error');
+                }
+                
+                if (mathKeywords.some(word => taskLower.includes(word))) {
+                    codingScore += 0.2;
+                    log(`  ✅ Math keywords detected`, 'success');
+                } else {
+                    log(`  ❌ No math keywords detected`, 'error');
+                }
+                
+                log(`Final python-coding score: ${codingScore.toFixed(2)}`, codingScore > 0.5 ? 'success' : 'error');
+                
+                // Determine winner
+                const selectedSkill = researchScore > codingScore ? 'research' : 'python-coding';
+                const winnerScore = Math.max(researchScore, codingScore);
+                
+                log(`🏆 Winner: ${selectedSkill} (score: ${winnerScore.toFixed(2)})`, selectedSkill === 'research' ? 'success' : 'error');
+                
+                if (selectedSkill === 'research') {
+                    log(`✅ SUCCESS: Research skill should be selected!`, 'success');
+                    log(`Expected: Direct answer about cat/dog differences`, 'success');
+                } else {
+                    log(`❌ FAILURE: Python-coding selected, but research should win`, 'error');
+                    log(`This indicates a bug in the skill selector logic`, 'error');
+                }
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(testSkillSelector, 1000);
+        });
+    </script>
+</body>
+</html>

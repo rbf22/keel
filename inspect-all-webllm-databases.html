@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebLLM All Databases Inspector</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #fff; padding: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #007AFF; }
+        .warning { color: #ffa500; }
+        button { padding: 10px; margin: 5px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:hover { background: #555; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #333; }
+        .database { margin: 15px 0; padding: 15px; border-left: 3px solid #51cf66; background: #111; }
+        .store { margin: 10px 0; padding: 8px; border-left: 2px solid #007AFF; background: #0a0a0a; }
+    </style>
+</head>
+<body>
+    <h1>🗄️ WebLLM All Databases Inspector</h1>
+    
+    <div class="section">
+        <button onclick="inspectAllWebLLMDatabases()">🔍 Inspect All WebLLM Databases</button>
+        <button onclick="clearOutput()">🗑️ Clear Output</button>
+        <button onclick="analyzeStorageQuota()">📊 Analyze Storage Quota</button>
+    </div>
+
+    <pre id="output"></pre>
+
+    <script>
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        function calculateSize(value) {
+            if (value === null || value === undefined) return 0;
+            
+            if (value instanceof ArrayBuffer) {
+                return value.byteLength;
+            }
+            
+            if (value instanceof Uint8Array || value instanceof Int8Array || 
+                value instanceof Uint16Array || value instanceof Int16Array ||
+                value instanceof Uint32Array || value instanceof Int32Array) {
+                return value.length * value.BYTES_PER_ELEMENT;
+            }
+            
+            if (typeof value === 'string') {
+                return value.length * 2;
+            }
+            
+            if (typeof value === 'number') {
+                return 8;
+            }
+            
+            if (typeof value === 'boolean') {
+                return 4;
+            }
+            
+            if (Array.isArray(value)) {
+                if (value.length > 100) {
+                    return value.length * 8; // Estimate
+                }
+                return value.reduce((sum, item) => sum + calculateSize(item), 0);
+            }
+            
+            if (typeof value === 'object') {
+                let size = 0;
+                
+                // Check for ArrayBuffer in buffer property
+                if (value.buffer && (value.buffer instanceof ArrayBuffer || value.buffer instanceof Uint8Array)) {
+                    return value.buffer.byteLength || value.buffer.length || 0;
+                }
+                
+                const keys = Object.keys(value);
+                for (let i = 0; i < Math.min(keys.length, 50); i++) {
+                    const key = keys[i];
+                    size += key.length * 2;
+                    size += calculateSize(value[key]);
+                }
+                return size;
+            }
+            
+            return 0;
+        }
+
+        async function inspectAllWebLLMDatabases() {
+            log("=== 🔍 INSPECTING ALL WEBLLM DATABASES ===", 'info');
+            
+            try {
+                // Get all databases
+                const databases = await indexedDB.databases();
+                log(`📊 Found ${databases.length} total databases`, 'info');
+                
+                // Filter for WebLLM-related databases
+                const webllmDatabases = databases.filter(db => 
+                    db.name && (
+                        db.name.toLowerCase().includes('webllm') ||
+                        db.name.toLowerCase().includes('mlc') ||
+                        db.name.startsWith('webllm:') ||
+                        db.name.includes('-MLC')
+                    )
+                );
+                
+                log(`🎯 Found ${webllmDatabases.length} WebLLM-related databases:`, 'success');
+                webllmDatabases.forEach(db => {
+                    log(`   📦 ${db.name} (v${db.version || 'unknown'})`, 'info');
+                });
+                
+                // Inspect each WebLLM database
+                for (const dbInfo of webllmDatabases) {
+                    await inspectDatabase(dbInfo.name, dbInfo.version || 1);
+                }
+                
+                // Also check for any databases with model-related names
+                const modelDatabases = databases.filter(db => 
+                    db.name && (
+                        db.name.toLowerCase().includes('model') ||
+                        db.name.toLowerCase().includes('cache') ||
+                        db.name.toLowerCase().includes('weights')
+                    ) && !webllmDatabases.includes(db)
+                );
+                
+                if (modelDatabases.length > 0) {
+                    log(`🎯 Found ${modelDatabases.length} other model-related databases:`, 'warning');
+                    modelDatabases.forEach(db => {
+                        log(`   📦 ${db.name} (v${db.version || 'unknown'})`, 'info');
+                    });
+                    
+                    for (const dbInfo of modelDatabases) {
+                        await inspectDatabase(dbInfo.name, dbInfo.version || 1);
+                    }
+                }
+                
+                log("=== 🏁 DATABASE INSPECTION COMPLETE ===", 'success');
+                
+            } catch (error) {
+                log(`❌ Error inspecting databases: ${error.message}`, 'error');
+            }
+        }
+
+        async function inspectDatabase(dbName, expectedVersion) {
+            log(`\n🗄️ Inspecting database: ${dbName}`, 'info');
+            
+            try {
+                const db = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open(dbName);
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => resolve(request.result);
+                    request.onupgradeneeded = (event) => {
+                        log(`   ⚠️ Database upgrade needed: ${event.oldVersion} → ${event.newVersion}`, 'warning');
+                    };
+                });
+                
+                log(`   ✅ Opened successfully (v${db.version})`, 'success');
+                log(`   📋 Object stores: ${Array.from(db.objectStoreNames).join(', ') || 'None'}`, 'info');
+                
+                if (db.objectStoreNames.length === 0) {
+                    log(`   ⚠️ No object stores found`, 'warning');
+                    db.close();
+                    return;
+                }
+                
+                // Inspect each object store
+                for (const storeName of db.objectStoreNames) {
+                    await inspectObjectStore(db, storeName);
+                }
+                
+                db.close();
+                
+            } catch (error) {
+                log(`   ❌ Error inspecting database: ${error.message}`, 'error');
+            }
+        }
+
+        async function inspectObjectStore(db, storeName) {
+            log(`   🏪 Inspecting store: ${storeName}`, 'info');
+            
+            try {
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                
+                // Get store info
+                log(`      📊 Key path: ${store.keyPath || 'none'}`, 'info');
+                log(`      📊 Auto increment: ${store.autoIncrement}`, 'info');
+                log(`      📊 Indexes: ${Array.from(store.indexNames).join(', ') || 'none'}`, 'info');
+                
+                // Get count
+                const count = await new Promise((resolve, reject) => {
+                    const request = store.count();
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+                
+                log(`      📊 Entry count: ${count}`, count > 0 ? 'success' : 'warning');
+                
+                if (count === 0) {
+                    return;
+                }
+                
+                // Get some sample entries
+                const sampleEntries = await new Promise((resolve, reject) => {
+                    const request = store.getAll();
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+                
+                // Analyze entries
+                let totalSize = 0;
+                let bufferEntries = 0;
+                let urlEntries = 0;
+                
+                sampleEntries.forEach((entry, index) => {
+                    const entrySize = calculateSize(entry);
+                    totalSize += entrySize;
+                    
+                    if (entry.buffer && (entry.buffer instanceof ArrayBuffer || entry.buffer instanceof Uint8Array)) {
+                        bufferEntries++;
+                    }
+                    
+                    if (entry.url || entry.key || typeof entry === 'string') {
+                        urlEntries++;
+                    }
+                    
+                    // Show first few entries
+                    if (index < 3) {
+                        log(`      📦 Sample entry ${index}:`, 'info');
+                        log(`         Type: ${typeof entry}`, 'info');
+                        log(`         Size: ${(entrySize / 1024 / 1024).toFixed(2)} MB`, 'info');
+                        log(`         Keys: ${Object.keys(entry).join(', ')}`, 'info');
+                        
+                        if (entry.url) {
+                            log(`         URL: ${entry.url.substring(0, 50)}...`, 'info');
+                        }
+                        if (entry.buffer) {
+                            const bufferSize = entry.buffer.byteLength || entry.buffer.length || 0;
+                            log(`         Buffer: ${bufferSize} bytes`, 'success');
+                        }
+                    }
+                });
+                
+                log(`      📊 Total store size: ${(totalSize / 1024 / 1024).toFixed(2)} MB`, 'success');
+                log(`      🧬 Buffer entries: ${bufferEntries}`, bufferEntries > 0 ? 'success' : 'info');
+                log(`      📦 URL entries: ${urlEntries}`, urlEntries > 0 ? 'success' : 'info');
+                
+                // Check indexes
+                for (const indexName of store.indexNames) {
+                    try {
+                        const index = store.index(indexName);
+                        const indexCount = await new Promise((resolve, reject) => {
+                            const request = index.count();
+                            request.onsuccess = () => resolve(request.result);
+                            request.onerror = () => reject(request.error);
+                        });
+                        
+                        log(`      📈 Index ${indexName}: ${indexCount} entries`, 'info');
+                        
+                        // If this is the 'urls' index, get some entries
+                        if (indexName.toLowerCase().includes('url') && indexCount > 0) {
+                            const urlEntries = await new Promise((resolve, reject) => {
+                                const request = index.getAll();
+                                request.onsuccess = () => resolve(request.result);
+                                request.onerror = () => reject(request.error);
+                            });
+                            
+                            log(`         🎯 Found ${urlEntries.length} URL index entries`, 'success');
+                            
+                            urlEntries.slice(0, 3).forEach((entry, i) => {
+                                const entrySize = calculateSize(entry);
+                                log(`            📦 URL entry ${i}: ${(entrySize / 1024 / 1024).toFixed(2)} MB`, 'info');
+                            });
+                        }
+                    } catch (indexError) {
+                        log(`      ❌ Error checking index ${indexName}: ${indexError.message}`, 'error');
+                    }
+                }
+                
+            } catch (error) {
+                log(`      ❌ Error inspecting store: ${error.message}`, 'error');
+            }
+        }
+
+        async function analyzeStorageQuota() {
+            log("\n=== 📊 STORAGE QUOTA ANALYSIS ===", 'info');
+            
+            try {
+                if ('storage' in navigator && 'estimate' in navigator.storage) {
+                    const estimate = await navigator.storage.estimate();
+                    
+                    log("📊 Storage Quota Breakdown:", 'info');
+                    log(`   💾 Total Usage: ${formatBytes(estimate.usage || 0)}`, 'success');
+                    log(`   📦 Total Quota: ${formatBytes(estimate.quota || 0)}`, 'info');
+                    log(`   📊 Usage Percentage: ${((estimate.usage || 0) / (estimate.quota || 1) * 100).toFixed(2)}%`, 'info');
+                    
+                    if (estimate.usageDetails) {
+                        log("📋 Usage Details:", 'info');
+                        Object.entries(estimate.usageDetails).forEach(([type, size]) => {
+                            log(`   📦 ${type}: ${formatBytes(size)}`, 'info');
+                        });
+                    }
+                    
+                } else {
+                    log("⚠️ Storage estimate API not available", 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ Error analyzing storage quota: ${error.message}`, 'error');
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(inspectAllWebLLMDatabases, 1000);
+        });
+    </script>
+</body>
+</html>

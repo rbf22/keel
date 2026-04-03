@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test GitHub WASM URLs</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .testing { background-color: #fff3cd; border-color: #ffeaa7; }
+        button { padding: 10px 15px; cursor: pointer; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Test GitHub WASM URLs</h1>
+    <button onclick="testGitHubUrls()">Test GitHub URLs</button>
+    <div id="results"></div>
+    
+    <script>
+        const results = document.getElementById('results');
+        
+        // GitHub Raw URLs (the new ones)
+        const githubModels = [
+            {
+                model_id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
+                model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm"
+            },
+            {
+                model_id: "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC", 
+                model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/TinyLlama-1.1B-Chat-v0.4-q4f16_1-ctx4k_cs1k-webgpu.wasm"
+            },
+            {
+                model_id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+                model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm"
+            }
+        ];
+        
+        window.testGitHubUrls = async function() {
+            results.innerHTML = '<h2>🔍 Testing GitHub URLs...</h2>';
+            
+            for (const model of githubModels) {
+                await testUrl(model.model_id, model.model_lib);
+            }
+        };
+        
+        async function testUrl(modelId, url) {
+            const testDiv = document.createElement('div');
+            testDiv.className = 'result testing';
+            testDiv.innerHTML = `
+                <h3>🧪 ${modelId}</h3>
+                <p><strong>URL:</strong> <code>${url}</code></p>
+                <p><strong>Status:</strong> Testing...</p>
+            `;
+            results.appendChild(testDiv);
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch(url, { method: 'HEAD' });
+                const endTime = Date.now();
+                
+                if (response.ok) {
+                    testDiv.className = 'result success';
+                    testDiv.innerHTML = `
+                        <h3>✅ ${modelId}</h3>
+                        <p><strong>URL:</strong> <code>${url}</code></p>
+                        <p><strong>Status:</strong> ${response.status} ${response.statusText}</p>
+                        <p><strong>Time:</strong> ${endTime - startTime}ms</p>
+                        <p><strong>Size:</strong> ${response.headers.get('content-length') ? (parseInt(response.headers.get('content-length')) / 1024 / 1024).toFixed(2) + ' MB' : 'Unknown'}</p>
+                        <button onclick="testDownload('${modelId}', '${url}')">Test Full Download</button>
+                    `;
+                } else {
+                    testDiv.className = 'result error';
+                    testDiv.innerHTML = `
+                        <h3>❌ ${modelId}</h3>
+                        <p><strong>URL:</strong> <code>${url}</code></p>
+                        <p><strong>Error:</strong> ${response.status} ${response.statusText}</p>
+                        <button onclick="testDownload('${modelId}', '${url}')">Try Full Download</button>
+                    `;
+                }
+            } catch (error) {
+                testDiv.className = 'result error';
+                testDiv.innerHTML = `
+                    <h3>❌ ${modelId}</h3>
+                    <p><strong>URL:</strong> <code>${url}</code></p>
+                    <p><strong>Error:</strong> ${error.message}</p>
+                `;
+            }
+        }
+        
+        window.testDownload = async function(modelId, url) {
+            try {
+                const startTime = Date.now();
+                const response = await fetch(url);
+                const blob = await response.blob();
+                const endTime = Date.now();
+                
+                alert(`✅ ${modelId} Downloaded Successfully!\n\nSize: ${(blob.size / 1024 / 1024).toFixed(2)} MB\nTime: ${endTime - startTime}ms`);
+                
+            } catch (error) {
+                alert(`❌ ${modelId} Download Failed!\n\nError: ${error.message}`);
+            }
+        };
+        
+        // Auto-test on load
+        window.addEventListener('load', () => {
+            setTimeout(testGitHubUrls, 1000);
+        });
+    </script>
+</body>
+</html>

@@ -11,30 +11,49 @@ vi.mock("@mlc-ai/web-llm", async (importOriginal) => {
   };
 })
 
+// Mock fetch for GitHub API
+vi.mock('global.fetch', () => {
+  return vi.fn(() => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve([
+      { name: 'v0_2_80', type: 'dir' },
+      { name: 'SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm', type: 'file', size: 5900000 },
+      { name: 'Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm', type: 'file', size: 5500000 }
+    ])
+  }))
+})
+
 describe('Model configuration verification', () => {
-  it('should include SmolLM2 in supported models', async () => {
+  it('should discover models dynamically', async () => {
     // Import the actual module
-    const { SUPPORTED_MODELS } = await import('../llm/models');
+    const { getSupportedModels } = await import('../llm/models');
     
-    console.log('All supported models:', SUPPORTED_MODELS.map(m => m.modelId));
+    const supportedModels = await getSupportedModels();
+    console.log('All supported models:', supportedModels.map(m => m.modelId));
     
-    const smolLM2Models = SUPPORTED_MODELS.filter(m => m.modelId.includes('SmolLM2-360M'));
+    expect(supportedModels.length).toBeGreaterThan(0);
+    
+    // Should include SmolLM2 from our mock data
+    const smolLM2Models = supportedModels.filter(m => m.modelId.includes('SmolLM2-360M'));
     expect(smolLM2Models.length).toBeGreaterThan(0);
     
-    const smolLM2 = smolLM2Models.find(m => m.modelId === 'SmolLM2-360M-Instruct-q4f16_1-MLC');
+    const smolLM2 = smolLM2Models.find(m => m.modelId.includes('SmolLM2-360M'));
     expect(smolLM2).toBeDefined();
-    expect(smolLM2?.vramRequiredMB).toBe(376.06); // From built-in config
+    expect(smolLM2?.vramRequiredMB).toBeGreaterThan(0);
   });
   
-  it('should have correct app config structure', async () => {
-    const { CUSTOM_APP_CONFIG } = await import('../llm/models');
+  it('should create dynamic app config', async () => {
+    const { getDynamicAppConfig } = await import('../llm/models');
     
-    expect(CUSTOM_APP_CONFIG.model_list).toBeDefined();
-    expect(CUSTOM_APP_CONFIG.model_list.length).toBeGreaterThan(0);
+    const config = await getDynamicAppConfig();
+    expect(config.model_list).toBeDefined();
+    expect(config.model_list.length).toBeGreaterThan(0);
+    expect(config.useIndexedDBCache).toBe(true);
     
-    const smolLM2 = CUSTOM_APP_CONFIG.model_list.find(m => m.model_id === 'SmolLM2-360M-Instruct-q4f16_1-MLC');
+    // Should include discovered models
+    const smolLM2 = config.model_list.find(m => m.model_id && m.model_id.includes('SmolLM2'));
     expect(smolLM2).toBeDefined();
-    expect(smolLM2?.model).toBe('https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/');
-    expect(smolLM2?.model_lib).toContain('SmolLM2-360M-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm');
+    expect(smolLM2?.model).toContain('huggingface.co');
+    expect(smolLM2?.model_lib).toContain('raw.githubusercontent.com');
   });
 });

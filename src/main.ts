@@ -18,12 +18,6 @@ let currentAbortController: AbortController | null = null;
 let environmentInitialized = false;
 let environmentInitializing = false;
 
-// Model selection handler
-function handleModelSelected(modelId: string) {
-  logger.info('main', `Model selected: ${modelId}`);
-  // Model selection is handled by the settings panel
-}
-
 // Initialize UI
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = HTML_TEMPLATE;
@@ -31,8 +25,7 @@ app.innerHTML = HTML_TEMPLATE;
 const ui = new UI(
   (text) => handleSend(text),
   () => stopTask(),
-  (modelId) => handleInitModel(modelId),
-  (modelId) => handleModelSelected(modelId)
+  (modelId) => handleInitModel(modelId)
 );
 
 // Python output handler
@@ -108,44 +101,71 @@ function handlePythonOutput(output: PythonOutput) {
   pythonLogContainer.scrollTop = pythonLogContainer.scrollHeight;
 }
 
-// Environment initialization
+// Environment initialization (optimized)
 async function initEnvironment(): Promise<void> {
-  if (environmentInitialized || environmentInitializing) return;
+  console.log("🚀 initEnvironment() called!");
+  
+  if (environmentInitialized || environmentInitializing) {
+    console.log("⚠️ Environment already initialized or initializing");
+    return;
+  }
   
   environmentInitializing = true;
+  console.log("🔥 Starting environment initialization...");
   logger.info('system', 'Initializing environment...');
   ui.status.setStatus("Setting up environment...");
   ui.status.setPythonStatus("Initializing...");
   
   try {
+    // Critical path only - initialize storage first
     await storage.init();
-    python = new PythonRuntime(handlePythonOutput);
-    await python.init();
-    await skillsEngine.init();
-    await skillsEngine.registerBuiltInSkills();
     
-    void ui.skills.refresh();
+    // Initialize Python runtime (non-blocking)
+    python = new PythonRuntime(handlePythonOutput);
+    void python.init().then(() => {
+      console.log("✅ Python runtime ready");
+    }).catch(err => {
+      console.error("❌ Python runtime failed:", err);
+    });
+    
+    // Initialize skills engine (non-blocking)
+    void skillsEngine.init().then(() => {
+      console.log("✅ Skills engine ready");
+      return skillsEngine.registerBuiltInSkills();
+    }).then(() => {
+      console.log("✅ Built-in skills registered");
+      void ui.skills.refresh();
+    }).catch(err => {
+      console.error("❌ Skills engine failed:", err);
+    });
+    
+    // Model sizes will be calculated on-demand during discovery
+    
+    // Initialize UI components (non-blocking)
     void ui.vfs.refresh();
     
     environmentInitialized = true;
     logger.info('system', 'Environment initialized');
     ui.status.setStatus("Environment ready - select model");
-    ui.status.setPythonStatus("Ready");
+    ui.status.setPythonStatus("Loading...");
 
-    // Zero-cache redirect: check if any models are cached
-    const cachedModels = await LocalLLMEngine.getAllCachedModels();
-    const cachedIds = cachedModels.filter(m => !m.isCorrupted).map(m => m.modelId);
-    ui.chat.updateCachedModels(cachedIds);
-
-    if (cachedIds.length === 0) {
-      logger.info('system', 'No cached models found, redirecting to Models tab');
-      ui.setTab('models');
-    }
+    // Get cached models quickly (non-blocking)
+    void LocalLLMEngine.getAllCachedModels().then(cachedModels => {
+      const cachedIds = cachedModels.filter(m => !m.isCorrupted).map(m => m.modelId);
+      void ui.chat.updateCachedModels(cachedIds);
+      
+      if (cachedIds.length === 0) {
+        logger.info('system', 'No cached models found, redirecting to Models tab');
+        ui.setTab('models');
+      }
+    }).catch(err => {
+      console.error("❌ Failed to get cached models:", err);
+    });
+    
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    logger.error('system', `Environment init failed: ${errorMessage}`, { error: err });
-    ui.status.setStatus(`Environment Error: ${errorMessage}`);
-    throw err;
+    logger.error('system', 'Environment initialization failed', { error: errorMessage });
+    ui.status.setStatus(`Error: ${errorMessage}`);
   } finally {
     environmentInitializing = false;
   }
@@ -154,6 +174,23 @@ async function initEnvironment(): Promise<void> {
 // Model initialization
 async function handleInitModel(modelId: string) {
   if (!modelId) return;
+  
+  // Validate that the model is available before attempting initialization
+  try {
+    const cachedModels = await LocalLLMEngine.getAllCachedModels();
+    const availableModel = cachedModels.find(m => m.modelId === modelId && !m.isCorrupted && !m.isEmpty);
+    
+    if (!availableModel) {
+      logger.warn('main', `Model ${modelId} is not available, skipping initialization`);
+      ui.status.setStatus(`Model ${modelId} not available. Please select a different model.`);
+      return;
+    }
+    
+    logger.info('main', `Model ${modelId} is available, proceeding with initialization`);
+  } catch (error) {
+    logger.error('main', 'Failed to check model availability', { error: error instanceof Error ? error.message : String(error) });
+    // Continue anyway and let the engine handle the error
+  }
   
   if (engine) {
     ui.status.setStatus("Unloading current model...");
@@ -254,7 +291,16 @@ async function handleSend(text: string) {
         obsDiv.textContent = update.content;
         contentDiv.appendChild(obsDiv);
       } else {
-        contentDiv.textContent = update.content;
+        // For system messages, append to show all updates
+        if (update.personaId === 'system') {
+          const msgDiv = document.createElement('div');
+          msgDiv.textContent = update.content;
+          msgDiv.style.marginBottom = '4px';
+          contentDiv.appendChild(msgDiv);
+        } else {
+          // For other personas, overwrite as before
+          contentDiv.textContent = update.content;
+        }
       }
 
       const messagesEl = document.getElementById('messages')!;
@@ -281,4 +327,6 @@ function stopTask() {
 }
 
 // Initial environment setup
+console.log("🚀 SCRIPT IS RUNNING!");
+console.log("🚀 About to call initEnvironment() from script bottom");
 void initEnvironment();

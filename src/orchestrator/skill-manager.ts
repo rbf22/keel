@@ -12,12 +12,86 @@ export class SkillManager {
   }
 
   /**
-   * Select appropriate skill for the task
+   * Select appropriate skill for the task using LLM-driven analysis
    */
-  selectSkill(task: string): string {
+  async selectSkill(task: string, chatHistory: ChatCompletionMessageParam[] = []): Promise<string> {
+    try {
+      logger.info('orchestrator', 'Using LLM-driven skill selection');
+      
+      // Use skill-selector for intelligent skill selection
+      const selectionResult = await this.executeSkill(
+        'skill-selector', 
+        { task: task }, 
+        chatHistory
+      );
+      
+      logger.info('orchestrator', 'Skill selector result received', { 
+        outputLength: selectionResult.output.length,
+        outputPreview: selectionResult.output.substring(0, 200) + '...'
+      });
+      
+      let selection;
+      try {
+        selection = JSON.parse(selectionResult.output);
+        logger.info('orchestrator', 'Skill selector JSON parsed successfully', { 
+          hasSelectedSkills: !!selection.selected_skills,
+          skillCount: selection.selected_skills?.length || 0
+        });
+      } catch (parseError) {
+        logger.error('orchestrator', 'Failed to parse skill selector JSON', { 
+          parseError: parseError instanceof Error ? parseError.message : String(parseError),
+          rawOutput: selectionResult.output
+        });
+        throw parseError;
+      }
+      
+      if (selection.selected_skills && selection.selected_skills.length > 0) {
+        const primarySkill = selection.selected_skills[0];
+        logger.info('orchestrator', 'LLM selected skill', { 
+          skill: primarySkill.skill,
+          confidence: primarySkill.confidence,
+          reasoning: primarySkill.reasoning
+        });
+        
+        // Validate that the selected skill exists
+        if (this.isValidSkill(primarySkill.skill)) {
+          return primarySkill.skill;
+        } else {
+          logger.warn('orchestrator', 'LLM selected invalid skill, using fallback', { 
+            invalidSkill: primarySkill.skill 
+          });
+        }
+      }
+      
+      // Fallback to simple selection if LLM fails or returns invalid skill
+      logger.warn('orchestrator', 'LLM skill selection failed or returned invalid skill, using fallback');
+      return this.fallbackSkillSelection(task);
+      
+    } catch (error) {
+      logger.error('orchestrator', 'LLM skill selection error, using fallback', { error });
+      return this.fallbackSkillSelection(task);
+    }
+  }
+
+  /**
+   * Validate that a skill name is valid and available
+   */
+  private isValidSkill(skillName: string): boolean {
+    const validSkills = [
+      'python-coding', 'data-analysis', 'research', 'quality-review', 
+      'task-planning', 'execution-analyzer', 'skill-selector', 'parameter-analyzer',
+      'analyze-data', 'knowledge-manager'
+    ];
+    return validSkills.includes(skillName);
+  }
+
+  /**
+   * Fallback skill selection for when LLM analysis fails
+   */
+  private fallbackSkillSelection(task: string): string {
     const taskLower = task.toLowerCase();
     
-    // Priority-based skill selection
+    // Priority-based skill selection (original logic as fallback)
     if (taskLower.includes('research') || taskLower.includes('find') || taskLower.includes('investigate')) {
       return 'research';
     }

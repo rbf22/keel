@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Storage Investigation Tool</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #fff; padding: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #007AFF; }
+        .warning { color: #ffa500; }
+        button { padding: 10px; margin: 5px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:hover { background: #555; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Storage Investigation Tool</h1>
+    
+    <div class="section">
+        <button onclick="investigateAll()">🔍 Investigate All Storage</button>
+        <button onclick="clearOutput()">🗑️ Clear Output</button>
+        <button onclick="checkAllDatabases()">📊 All IndexedDB Databases</button>
+        <button onclick="checkLocalStorage()">📦 Local Storage</button>
+        <button onclick="checkSessionStorage()">📋 Session Storage</button>
+        <button onclick="checkCacheStorage()">💾 Cache Storage</button>
+        <button onclick="checkWebLLMSpecific()">🤖 WebLLM Specific</button>
+    </div>
+
+    <pre id="output"></pre>
+
+    <script>
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        async function investigateAll() {
+            log("=== 🚀 STARTING COMPREHENSIVE STORAGE INVESTIGATION ===", 'info');
+            
+            await checkStorageUsage();
+            await checkAllDatabases();
+            await checkLocalStorage();
+            await checkSessionStorage();
+            await checkCacheStorage();
+            await checkWebLLMSpecific();
+            
+            log("=== 🏁 INVESTIGATION COMPLETE ===", 'success');
+        }
+
+        async function checkStorageUsage() {
+            log("\n=== 📊 STORAGE USAGE ===", 'info');
+            
+            if (navigator.storage && navigator.storage.estimate) {
+                try {
+                    const estimate = await navigator.storage.estimate();
+                    log(`✅ Browser Storage: ${formatBytes(estimate.usage || 0)} / ${formatBytes(estimate.quota || 0)} (${((estimate.usage || 0) / (estimate.quota || 1) * 100).toFixed(1)}%)`, 'success');
+                    log(`📦 Usage Details:`, 'info');
+                    log(`   - Total Usage: ${formatBytes(estimate.usage)}`, 'info');
+                    log(`   - Quota: ${formatBytes(estimate.quota)}`, 'info');
+                    
+                    if (estimate.usageDetails) {
+                        log(`📋 Usage Breakdown:`, 'info');
+                        Object.entries(estimate.usageDetails).forEach(([type, size]) => {
+                            log(`   - ${type}: ${formatBytes(size)}`, 'info');
+                        });
+                    }
+                } catch (error) {
+                    log(`❌ Error getting storage estimate: ${error.message}`, 'error');
+                }
+            } else {
+                log("⚠️ Storage estimate API not available", 'warning');
+            }
+        }
+
+        async function checkAllDatabases() {
+            log("\n=== 🗄️ ALL INDEXEDDB DATABASES ===", 'info');
+            
+            try {
+                const databases = await indexedDB.databases();
+                log(`📊 Found ${databases.length} IndexedDB databases:`, 'info');
+                
+                for (const db of databases) {
+                    log(`   📦 ${db.name} (v${db.version})`, 'info');
+                    
+                    // Try to get size estimate
+                    try {
+                        const size = await getDatabaseSize(db.name);
+                        log(`      └─ Size: ${formatBytes(size)}`, size > 0 ? 'success' : 'warning');
+                    } catch (sizeError) {
+                        log(`      └─ Size: Error - ${sizeError.message}`, 'error');
+                    }
+                    
+                    // Check if it's WebLLM related
+                    if (db.name && (db.name.includes('webllm') || db.name.includes('model') || db.name.includes('cache'))) {
+                        log(`      └─ 🤖 LIKELY WEBLLM RELATED`, 'warning');
+                        await investigateDatabase(db.name);
+                    }
+                }
+            } catch (error) {
+                log(`❌ Error listing databases: ${error.message}`, 'error');
+            }
+        }
+
+        async function investigateDatabase(dbName) {
+            log(`      🔍 Investigating ${dbName}...`, 'info');
+            
+            try {
+                const db = await openDatabase(dbName);
+                log(`         ✅ Opened successfully`, 'success');
+                
+                // List object stores
+                const storeNames = Array.from(db.objectStoreNames);
+                log(`         📋 Object stores: ${storeNames.join(', ')}`, 'info');
+                
+                // Check each store
+                for (const storeName of storeNames) {
+                    try {
+                        const transaction = db.transaction(storeName, 'readonly');
+                        const store = transaction.objectStore(storeName);
+                        const count = await store.count();
+                        log(`            └─ ${storeName}: ${count} items`, count > 0 ? 'success' : 'warning');
+                        
+                        if (count > 0 && count < 100) {
+                            // Get first few keys to understand structure
+                            const keys = await getAllKeys(store, Math.min(5, count));
+                            log(`               Keys: ${keys.map(k => `"${k}"`).join(', ')}`, 'info');
+                        }
+                    } catch (storeError) {
+                        log(`            └─ ${storeName}: Error - ${storeError.message}`, 'error');
+                    }
+                }
+                
+                db.close();
+            } catch (error) {
+                log(`         ❌ Error investigating: ${error.message}`, 'error');
+            }
+        }
+
+        function openDatabase(dbName) {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+            });
+        }
+
+        function getAllKeys(store, limit = 5) {
+            return new Promise((resolve, reject) => {
+                const request = store.getAllKeys(null, limit);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+            });
+        }
+
+        async function getDatabaseSize(dbName) {
+            // This is a rough estimate - might not work in all browsers
+            try {
+                if ('storage' in navigator && 'estimate' in navigator.storage) {
+                    const estimate = await navigator.storage.estimate();
+                    return estimate.usage || 0;
+                }
+            } catch (error) {
+                // Fallback: try to estimate by opening database
+                return 0;
+            }
+            return 0;
+        }
+
+        async function checkLocalStorage() {
+            log("\n=== 📦 LOCAL STORAGE ===", 'info');
+            
+            try {
+                const keys = Object.keys(localStorage);
+                log(`📊 Found ${keys.length} localStorage items:`, 'info');
+                
+                let totalSize = 0;
+                for (const key of keys) {
+                    const value = localStorage.getItem(key);
+                    const size = (key.length + (value?.length || 0)) * 2; // UTF-16
+                    totalSize += size;
+                    
+                    if (key.includes('model') || key.includes('cache') || key.includes('webllm')) {
+                        log(`   🤖 ${key}: ${formatBytes(size)} (first 100 chars: ${(value || '').substring(0, 100)}...)`, 'warning');
+                    } else if (keys.length <= 10) {
+                        log(`   📦 ${key}: ${formatBytes(size)}`, 'info');
+                    }
+                }
+                
+                log(`📊 Total localStorage size: ${formatBytes(totalSize)}`, 'success');
+            } catch (error) {
+                log(`❌ Error checking localStorage: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkSessionStorage() {
+            log("\n=== 📋 SESSION STORAGE ===", 'info');
+            
+            try {
+                const keys = Object.keys(sessionStorage);
+                log(`📊 Found ${keys.length} sessionStorage items:`, 'info');
+                
+                let totalSize = 0;
+                for (const key of keys) {
+                    const value = sessionStorage.getItem(key);
+                    const size = (key.length + (value?.length || 0)) * 2; // UTF-16
+                    totalSize += size;
+                    
+                    if (key.includes('model') || key.includes('cache') || key.includes('webllm')) {
+                        log(`   🤖 ${key}: ${formatBytes(size)}`, 'warning');
+                    } else if (keys.length <= 10) {
+                        log(`   📋 ${key}: ${formatBytes(size)}`, 'info');
+                    }
+                }
+                
+                log(`📊 Total sessionStorage size: ${formatBytes(totalSize)}`, 'success');
+            } catch (error) {
+                log(`❌ Error checking sessionStorage: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkCacheStorage() {
+            log("\n=== 💾 CACHE STORAGE ===", 'info');
+            
+            try {
+                if ('caches' in window) {
+                    const cacheNames = await caches.keys();
+                    log(`📊 Found ${cacheNames.length} cache storages:`, 'info');
+                    
+                    for (const cacheName of cacheNames) {
+                        try {
+                            const cache = await caches.open(cacheName);
+                            const keys = await cache.keys();
+                            let totalSize = 0;
+                            
+                            for (const request of keys.slice(0, 10)) { // Check first 10 items
+                                try {
+                                    const response = await cache.match(request);
+                                    if (response) {
+                                        const blob = await response.blob();
+                                        totalSize += blob.size;
+                                    }
+                                } catch (error) {
+                                    // Skip items that can't be accessed
+                                }
+                            }
+                            
+                            log(`   💾 ${cacheName}: ${keys.length} items, ~${formatBytes(totalSize)} (sampled)`, 
+                                cacheName.includes('model') || cacheName.includes('webllm') ? 'warning' : 'info');
+                        } catch (cacheError) {
+                            log(`   💾 ${cacheName}: Error - ${cacheError.message}`, 'error');
+                        }
+                    }
+                } else {
+                    log("⚠️ Cache API not available", 'warning');
+                }
+            } catch (error) {
+                log(`❌ Error checking cache storage: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkWebLLMSpecific() {
+            log("\n=== 🤖 WEBLLM SPECIFIC INVESTIGATION ===", 'info');
+            
+            // Check if WebLLM is available
+            if (typeof window.webllm !== 'undefined') {
+                log("✅ WebLLM is available", 'success');
+                
+                try {
+                    // Try to access WebLLM internals
+                    log("🔍 Checking WebLLM internal state...", 'info');
+                    
+                    // Check for any global WebLLM state
+                    if (window.webllm && window.webllm.engine) {
+                        log("   🤖 WebLLM engine found", 'success');
+                    }
+                    
+                    // Check for model loading state
+                    const webllmKeys = Object.keys(window).filter(key => 
+                        key.toLowerCase().includes('webllm') || 
+                        key.toLowerCase().includes('model') ||
+                        key.toLowerCase().includes('cache')
+                    );
+                    
+                    if (webllmKeys.length > 0) {
+                        log(`   🔍 Found WebLLM-related globals: ${webllmKeys.join(', ')}`, 'info');
+                    }
+                    
+                } catch (error) {
+                    log(`❌ Error checking WebLLM: ${error.message}`, 'error');
+                }
+            } else {
+                log("⚠️ WebLLM not found in window object", 'warning');
+            }
+            
+            // Look for any model-related IndexedDB databases with different naming patterns
+            try {
+                const databases = await indexedDB.databases();
+                const modelDatabases = databases.filter(db => 
+                    db.name && (
+                        db.name.toLowerCase().includes('model') ||
+                        db.name.toLowerCase().includes('llm') ||
+                        db.name.toLowerCase().includes('cache') ||
+                        db.name.toLowerCase().includes('weights') ||
+                        db.name.toLowerCase().includes('tensor')
+                    )
+                );
+                
+                log(`🔍 Found ${modelDatabases.length} potentially model-related databases:`, 'info');
+                for (const db of modelDatabases) {
+                    log(`   🤖 ${db.name} (v${db.version})`, 'warning');
+                }
+            } catch (error) {
+                log(`❌ Error checking model databases: ${error.message}`, 'error');
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(investigateAll, 1000);
+        });
+    </script>
+</body>
+</html>

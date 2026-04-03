@@ -99,6 +99,22 @@ export const HTML_TEMPLATE = `
                 </div>
               </div>
             </div>
+
+            <hr style="border: 0; border-top: 1px solid #333; margin: 1.5rem 0;">
+
+            <!-- Artifacts Management Section -->
+            <div class="python-header">
+              <h3>Artifacts Management</h3>
+              <div class="skills-controls">
+                <button id="refreshArtifactsBtn" class="header-button">Refresh List</button>
+                <button id="clearAllArtifactsBtn" class="header-button danger-button">Clear All Artifacts</button>
+              </div>
+            </div>
+            <div class="settings-section">
+              <div id="artifactsList" class="artifacts-list">
+                <div class="output-log">Loading artifacts...</div>
+              </div>
+            </div>
           </div>
         </div>
 

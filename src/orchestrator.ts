@@ -31,7 +31,7 @@ export class AgentOrchestrator {
 
   constructor(_engine: LLMEngine, python: PythonRuntime) {
     this.skillManager = new SkillManager(python);
-    this.artifactHandler = new ArtifactHandler(python);
+    this.artifactHandler = new ArtifactHandler(python, this.skillManager);
     this.loopDetector = new LoopDetector();
     this.vfsHandler = new VFSHandler();
     this.planExecutor = new PlanExecutor(python);
@@ -48,7 +48,7 @@ export class AgentOrchestrator {
     const vfsResult = await this.vfsHandler.handleVFSCommand(userRequest);
     if (vfsResult) return this.finalizeDirectTask(userRequest, vfsResult);
 
-    const artifactResult = await this.artifactHandler.handleArtifactCommand(userRequest, this.sharedContext?.artifacts);
+    const artifactResult = await this.artifactHandler.handleArtifactCommand(userRequest, this.sharedContext?.artifacts, this.chatHistory);
     if (artifactResult) return this.finalizeDirectTask(userRequest, artifactResult);
     
     // 2. Start full task execution
@@ -92,7 +92,7 @@ export class AgentOrchestrator {
   private async runLegacyTask(userRequest: string, onUpdate: (response: AgentResponse) => void, signal?: AbortSignal): Promise<ChatCompletionMessageParam[]> {
     let loopCount = 0;
     let taskComplete = false;
-    let currentSkill = this.skillManager.selectSkill(userRequest);
+    let currentSkill = await this.skillManager.selectSkill(userRequest);
     let taskInstruction = userRequest;
 
     while (!taskComplete && loopCount < this.maxLoops) {
@@ -120,7 +120,7 @@ export class AgentOrchestrator {
         break;
       }
       
-      // Progression logic
+      // Skill transition logic
       if (currentSkill === 'python-coding') {
         try {
           const artifact: CodeArtifact = JSON.parse(result);
@@ -134,7 +134,7 @@ export class AgentOrchestrator {
         try {
           const review: ReviewResult = JSON.parse(result);
           if (review.approved && this.currentArtifact) {
-            const res = await this.artifactHandler.executeArtifact(this.currentArtifact, userRequest);
+            const res = await this.artifactHandler.executeArtifact(this.currentArtifact, userRequest, this.chatHistory);
             onUpdate({ personaId: "system", content: `Result: ${res}` });
             taskComplete = true;
           } else {
@@ -144,8 +144,31 @@ export class AgentOrchestrator {
         } catch (e) {
           taskComplete = true;
         }
-      } else {
+      } else if (currentSkill === 'research') {
+        // Research skill provides direct answers, no artifact needed
+        onUpdate({ personaId: "system", content: `Research completed: ${result}` });
         taskComplete = true;
+      } else if (currentSkill === 'data-analysis') {
+        // Data analysis can provide direct results
+        onUpdate({ personaId: "system", content: `Analysis completed: ${result}` });
+        taskComplete = true;
+      } else if (currentSkill === 'knowledge-manager') {
+        // Knowledge manager provides direct guidance and processes information
+        onUpdate({ personaId: "system", content: `Knowledge management: ${result}` });
+        taskComplete = true;
+      } else {
+        // For other skills, try to determine next skill
+        try {
+          const nextSkill = await this.skillManager.selectSkill(result, this.chatHistory);
+          if (nextSkill !== currentSkill) {
+            currentSkill = nextSkill;
+            taskInstruction = result;
+          } else {
+            taskComplete = true;
+          }
+        } catch (e) {
+          taskComplete = true;
+        }
       }
 
       this.loopDetector.addSkillToHistory(currentSkill);

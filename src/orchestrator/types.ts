@@ -13,6 +13,25 @@ export interface CodeArtifact {
   created_by: string;
   reviewed_by?: string;
   status: 'pending' | 'approved' | 'needs_fixes' | 'rejected';
+  artifactInterface?: ArtifactInterface; // Renamed to avoid 'interface' reserved word
+}
+
+export interface ArtifactInterface {
+  name: string;
+  parameters: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    has_default?: boolean;
+    default?: any;
+  }>;
+  calling_pattern: string;
+  has_varargs: boolean;
+  has_kwargs: boolean;
+  execution_template?: string;
+  total_parameters: number;
+  required_parameters: number;
+  analysis_failed?: boolean;
 }
 
 export interface ReviewResult {

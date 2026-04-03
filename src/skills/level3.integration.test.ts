@@ -72,6 +72,8 @@ with open('extra/data.txt', 'r') as f:
 
     const mockResources = {
       'SKILL.md': skillContent,
+      'scripts/main.py': `with open('extra/data.txt', 'r') as f:
+    print(f.read())`,
       'extra/data.txt': 'hello from level 3'
     }
 
@@ -118,6 +120,7 @@ print("lazy")
     
     const mockResources = {
       'SKILL.md': skillContent,
+      'scripts/main.py': `print("lazy")`,
       'config.json': '{"key": "value"}'
     }
 

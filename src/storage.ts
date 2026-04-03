@@ -323,6 +323,90 @@ export class KeelStorage {
       request.onerror = () => reject(request.error);
     });
   }
+
+  // Artifact Methods
+  async getArtifacts(): Promise<Array<{ path: string; content: string; updatedAt: number }>> {
+    if (!this.db) throw new Error("Storage not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["vfs"], "readonly");
+      const store = transaction.objectStore("vfs");
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const files = request.result as VFSFile[];
+        const artifacts = files.filter(file => file.path.startsWith("keel://artifacts/"));
+        resolve(artifacts.map(artifact => ({
+          path: artifact.path,
+          content: artifact.content,
+          updatedAt: artifact.updatedAt
+        })));
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async deleteArtifact(artifactPath: string): Promise<boolean> {
+    if (!this.db) throw new Error("Storage not initialized");
+    const fullPath = this.normalizePath(artifactPath);
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["vfs"], "readwrite");
+      const store = transaction.objectStore("vfs");
+      const request = store.delete(fullPath);
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => {
+        if (request.error?.name === 'NotFoundError') {
+          resolve(false); // Artifact didn't exist
+        } else {
+          reject(request.error);
+        }
+      };
+    });
+  }
+
+  async deleteAllArtifacts(): Promise<number> {
+    if (!this.db) throw new Error("Storage not initialized");
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(["vfs"], "readwrite");
+      const store = transaction.objectStore("vfs");
+      const getAllRequest = store.getAll();
+      
+      getAllRequest.onsuccess = () => {
+        const files = getAllRequest.result as VFSFile[];
+        const artifacts = files.filter(file => file.path.startsWith("keel://artifacts/"));
+        
+        if (artifacts.length === 0) {
+          resolve(0);
+          return;
+        }
+
+        let deletedCount = 0;
+        let errors: string[] = [];
+
+        // Delete each artifact
+        artifacts.forEach(artifact => {
+          const deleteRequest = store.delete(artifact.path);
+          deleteRequest.onsuccess = () => {
+            deletedCount++;
+            if (deletedCount === artifacts.length) {
+              if (errors.length > 0) {
+                reject(new Error(`Some artifacts failed to delete: ${errors.join(', ')}`));
+              } else {
+                resolve(deletedCount);
+              }
+            }
+          };
+          deleteRequest.onerror = () => {
+            errors.push(`Failed to delete ${artifact.path}: ${deleteRequest.error?.message || 'Unknown error'}`);
+            deletedCount++;
+            if (deletedCount === artifacts.length) {
+              reject(new Error(`Some artifacts failed to delete: ${errors.join(', ')}`));
+            }
+          };
+        });
+      };
+      
+      getAllRequest.onerror = () => reject(getAllRequest.error);
+    });
+  }
 }
 
 export const storage = new KeelStorage();

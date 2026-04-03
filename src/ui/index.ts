@@ -16,8 +16,7 @@ export class UI {
   constructor(
     onSendMessage: (text: string) => void,
     onStopTask: () => void,
-    onInitRequested: (modelId: string) => void,
-    onModelSelected?: (modelId: string) => void
+    onInitRequested: (modelId: string) => void
   ) {
     this.chat = new ChatPanel(onSendMessage, onStopTask, onInitRequested);
     this.logs = new LogPanel();

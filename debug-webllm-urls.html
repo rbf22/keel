@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug WebLLM URLs</title>
+</head>
+<body>
+    <h1>WebLLM URL Debug</h1>
+    <div id="output"></div>
+    
+    <script type="module">
+        const output = document.getElementById('output');
+        const log = (msg) => {
+            console.log(msg);
+            output.innerHTML += `<div>${msg}</div>`;
+        };
+        
+        try {
+            log('🔍 Importing WebLLM...');
+            const webllm = await import("@mlc-ai/web-llm");
+            
+            log('✅ WebLLM imported successfully');
+            log(`📦 modelLibURLPrefix: ${webllm.modelLibURLPrefix}`);
+            log(`📦 modelVersion: ${webllm.modelVersion}`);
+            
+            // Test the WASM URL construction
+            const wasmFile = "TinyLlama-1.1B-Chat-v0.4-q4f16_1-ctx4k_cs1k-webgpu.wasm";
+            const fullUrl = webllm.modelLibURLPrefix + webllm.modelVersion + "/" + wasmFile;
+            log(`🔗 Full WASM URL: ${fullUrl}`);
+            
+            // Try to fetch the WASM file
+            log('🌐 Testing WASM URL accessibility...');
+            try {
+                const response = await fetch(fullUrl, { method: 'HEAD' });
+                if (response.ok) {
+                    log(`✅ WASM file is accessible: ${response.status}`);
+                } else {
+                    log(`❌ WASM file not accessible: ${response.status} ${response.statusText}`);
+                }
+            } catch (error) {
+                log(`❌ Network error: ${error.message}`);
+            }
+            
+            // Check what models are available in prebuiltAppConfig
+            log('📋 Checking prebuiltAppConfig models...');
+            if (webllm.prebuiltAppConfig && webllm.prebuiltAppConfig.model_list) {
+                webllm.prebuiltAppConfig.model_list.forEach((model, index) => {
+                    log(`  ${index + 1}. ${model.model_id}`);
+                    log(`     model_lib: ${model.model_lib}`);
+                });
+            } else {
+                log('❌ No prebuiltAppConfig.model_list found');
+            }
+            
+        } catch (error) {
+            log(`❌ Error: ${error.message}`);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebLLM Storage Deep Dive</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #fff; padding: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #007AFF; }
+        .warning { color: #ffa500; }
+        button { padding: 10px; margin: 5px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:hover { background: #555; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #333; }
+        .hex-dump { font-family: monospace; font-size: 12px; line-height: 1.2; }
+        .binary-info { background: #111; padding: 10px; margin: 10px 0; border-left: 3px solid #007AFF; }
+    </style>
+</head>
+<body>
+    <h1>🔬 WebLLM Storage Deep Dive Investigation</h1>
+    
+    <div class="section">
+        <button onclick="investigateWebLLMStorage()">🔬 Investigate WebLLM Storage</button>
+        <button onclick="clearOutput()">🗑️ Clear Output</button>
+        <button onclick="checkRawDatabaseAccess()">🗃️ Raw Database Access</button>
+        <button onclick="checkFileSystemAPI()">📁 Check File System API</button>
+        <button onclick="checkWebAssembly()">🧬 Check WebAssembly</button>
+        <button onclick="analyzeStorageQuota()">📊 Analyze Storage Quota</button>
+    </div>
+
+    <pre id="output"></pre>
+
+    <script>
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        async function investigateWebLLMStorage() {
+            log("=== 🔬 STARTING WEBLLM STORAGE DEEP DIVE ===", 'info');
+            
+            await checkRawDatabaseAccess();
+            await checkFileSystemAPI();
+            await checkWebAssembly();
+            await analyzeStorageQuota();
+            
+            log("=== 🏁 INVESTIGATION COMPLETE ===", 'success');
+        }
+
+        async function checkRawDatabaseAccess() {
+            log("\n=== 🗃️ RAW DATABASE ACCESS INVESTIGATION ===", 'info');
+            
+            try {
+                const databases = await indexedDB.databases();
+                const webllmDatabases = databases.filter(db => 
+                    db.name && db.name.startsWith('webllm:')
+                );
+                
+                log(`Found ${webllmDatabases.length} WebLLM databases:`, 'info');
+                
+                for (const dbInfo of webllmDatabases) {
+                    await deepInvestigateDatabase(dbInfo.name);
+                }
+                
+            } catch (error) {
+                log(`❌ Error accessing databases: ${error.message}`, 'error');
+            }
+        }
+
+        async function deepInvestigateDatabase(dbName) {
+            log(`\n🔍 Deep investigating: ${dbName}`, 'info');
+            
+            try {
+                // Method 1: Try to open and inspect all possible access methods
+                const db = await openDatabaseWithRetry(dbName);
+                log(`   ✅ Database opened successfully`, 'success');
+                
+                // Check all possible ways WebLLM might store data
+                await checkDatabaseMetadata(db, dbName);
+                await checkObjectStoreDetails(db, dbName);
+                await checkHiddenStores(db, dbName);
+                await checkBinaryData(db, dbName);
+                
+                db.close();
+                
+            } catch (error) {
+                log(`   ❌ Error investigating ${dbName}: ${error.message}`, 'error');
+            }
+        }
+
+        function openDatabaseWithRetry(dbName) {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName);
+                
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+                
+                // Try to handle version changes
+                request.onupgradeneeded = (event) => {
+                    log(`   ⚠️ Database version upgrade needed`, 'warning');
+                    const db = event.target.result;
+                    log(`   📋 Available stores after upgrade: ${Array.from(db.objectStoreNames).join(', ')}`, 'info');
+                };
+            });
+        }
+
+        async function checkDatabaseMetadata(db, dbName) {
+            log(`   📋 Checking database metadata...`, 'info');
+            
+            try {
+                // Check database version and properties
+                log(`      📊 Version: ${db.version}`, 'info');
+                log(`      📋 Object stores: ${Array.from(db.objectStoreNames).join(', ')}`, 'info');
+                
+                // Check if database has any hidden properties
+                const dbProps = Object.getOwnPropertyNames(db);
+                log(`      🔍 Database properties: ${dbProps.join(', ')}`, 'info');
+                
+                // Check for any WebLLM-specific extensions
+                if (db.name.includes('model') || db.name.includes('MLC')) {
+                    log(`      🤖 Model database detected - investigating further...`, 'warning');
+                    await investigateModelDatabase(db, dbName);
+                }
+                
+            } catch (error) {
+                log(`      ❌ Error checking metadata: ${error.message}`, 'error');
+            }
+        }
+
+        async function investigateModelDatabase(db, dbName) {
+            log(`      🤖 Deep investigating model database...`, 'info');
+            
+            try {
+                // Check if WebLLM stores data in non-standard ways
+                const modelId = dbName.replace('webllm:', '');
+                
+                // Method 1: Check if there's a hidden 'data' or 'model' store
+                const possibleStoreNames = ['data', 'model', 'weights', 'tensors', 'binary', 'cache', 'storage'];
+                
+                for (const storeName of possibleStoreNames) {
+                    if (db.objectStoreNames.contains(storeName)) {
+                        log(`         🎯 Found potential data store: ${storeName}`, 'success');
+                        await inspectStoreContents(db, storeName);
+                    }
+                }
+                
+                // Method 2: Try to access any store that might exist
+                for (let i = 0; i < db.objectStoreNames.length; i++) {
+                    const storeName = db.objectStoreNames[i];
+                    await inspectStoreContents(db, storeName);
+                }
+                
+                // Method 3: Check if WebLLM uses a different storage mechanism
+                await checkAlternativeStorage(dbName, modelId);
+                
+            } catch (error) {
+                log(`      ❌ Error investigating model database: ${error.message}`, 'error');
+            }
+        }
+
+        async function inspectStoreContents(db, storeName) {
+            log(`         🔍 Inspecting store: ${storeName}`, 'info');
+            
+            try {
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                
+                // Get count
+                const count = await store.count();
+                log(`            📊 Store count: ${count}`, count > 0 ? 'success' : 'warning');
+                
+                if (count > 0 && count <= 10) {
+                    // Get all keys to understand structure
+                    const keys = await store.getAllKeys();
+                    log(`            🔑 Keys: ${keys.map(k => `"${k}"`).join(', ')}`, 'info');
+                    
+                    // Get first few items to see structure
+                    const items = await store.getAll(Math.min(3, count));
+                    items.forEach((item, index) => {
+                        log(`            📦 Item ${index}:`, 'info');
+                        log(`               Type: ${typeof item}`, 'info');
+                        log(`               Size: ${JSON.stringify(item).length} chars`, 'info');
+                        
+                        if (item instanceof ArrayBuffer) {
+                            log(`               🧬 ArrayBuffer: ${item.byteLength} bytes`, 'success');
+                        } else if (item instanceof Uint8Array) {
+                            log(`               🧬 Uint8Array: ${item.length} bytes`, 'success');
+                        } else if (typeof item === 'string') {
+                            log(`               📝 String: ${item.substring(0, 100)}${item.length > 100 ? '...' : ''}`, 'info');
+                        } else {
+                            log(`               📋 Object: ${JSON.stringify(item).substring(0, 200)}...`, 'info');
+                        }
+                    });
+                }
+                
+            } catch (error) {
+                log(`            ❌ Error inspecting store: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkObjectStoreDetails(db, dbName) {
+            log(`   🏪 Checking object store details...`, 'info');
+            
+            try {
+                const storeNames = Array.from(db.objectStoreNames);
+                
+                for (const storeName of storeNames) {
+                    log(`      🏪 Store: ${storeName}`, 'info');
+                    
+                    try {
+                        const transaction = db.transaction([storeName], 'readonly');
+                        const store = transaction.objectStore(storeName);
+                        
+                        // Get store metadata
+                        log(`         📊 Key path: ${store.keyPath || 'none'}`, 'info');
+                        log(`         📊 Auto increment: ${store.autoIncrement}`, 'info');
+                        log(`         📊 Index names: ${Array.from(store.indexNames).join(', ')}`, 'info');
+                        
+                        // Check indexes
+                        for (const indexName of store.indexNames) {
+                            const index = store.index(indexName);
+                            log(`            📈 Index: ${indexName} (keyPath: ${index.keyPath}, unique: ${index.unique})`, 'info');
+                        }
+                        
+                    } catch (storeError) {
+                        log(`         ❌ Error checking store ${storeName}: ${storeError.message}`, 'error');
+                    }
+                }
+                
+            } catch (error) {
+                log(`      ❌ Error checking object stores: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkHiddenStores(db, dbName) {
+            log(`   🕵️ Checking for hidden stores...`, 'info');
+            
+            try {
+                // WebLLM might use non-standard store names or methods
+                const storeNames = Array.from(db.objectStoreNames);
+                
+                // Look for stores with unusual names
+                const unusualStores = storeNames.filter(name => 
+                    !name.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/) || 
+                    name.includes('.') ||
+                    name.includes('-') ||
+                    name.length > 50
+                );
+                
+                if (unusualStores.length > 0) {
+                    log(`      🎯 Found unusual store names: ${unusualStores.join(', ')}`, 'warning');
+                    for (const storeName of unusualStores) {
+                        await inspectStoreContents(db, storeName);
+                    }
+                } else {
+                    log(`      ℹ️ No unusual store names found`, 'info');
+                }
+                
+            } catch (error) {
+                log(`      ❌ Error checking hidden stores: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkBinaryData(db, dbName) {
+            log(`   🧬 Checking for binary data...`, 'info');
+            
+            try {
+                const storeNames = Array.from(db.objectStoreNames);
+                
+                for (const storeName of storeNames) {
+                    try {
+                        const transaction = db.transaction([storeName], 'readonly');
+                        const store = transaction.objectStore(storeName);
+                        
+                        // Try to get first item to check if it's binary
+                        const request = store.get(store.openCursor().result?.key || 0);
+                        
+                        request.onsuccess = () => {
+                            const item = request.result;
+                            if (item) {
+                                if (item instanceof ArrayBuffer || item instanceof Uint8Array) {
+                                    log(`      🧬 Found binary data in ${storeName}`, 'success');
+                                    log(`         Size: ${item.byteLength || item.length} bytes`, 'info');
+                                    
+                                    // Show hex dump of first few bytes
+                                    const bytes = item instanceof ArrayBuffer ? 
+                                        new Uint8Array(item) : item;
+                                    const hexDump = Array.from(bytes.slice(0, 32))
+                                        .map(b => b.toString(16).padStart(2, '0'))
+                                        .join(' ');
+                                    log(`         Hex: ${hexDump}`, 'info');
+                                }
+                            }
+                        };
+                        
+                    } catch (error) {
+                        // Ignore errors in binary data check
+                    }
+                }
+                
+            } catch (error) {
+                log(`      ❌ Error checking binary data: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkAlternativeStorage(dbName, modelId) {
+            log(`   🔄 Checking alternative storage mechanisms...`, 'info');
+            
+            try {
+                // Method 1: Check if WebLLM uses Origin Private File System
+                if ('storage' in navigator && 'getDirectory' in navigator.storage) {
+                    log(`      📁 Origin Private File System available`, 'info');
+                    try {
+                        const root = await navigator.storage.getDirectory();
+                        log(`      ✅ Got root directory`, 'success');
+                        
+                        // Try to find model-related files
+                        await searchForModelFiles(root, modelId);
+                    } catch (error) {
+                        log(`      ❌ Error accessing file system: ${error.message}`, 'error');
+                    }
+                } else {
+                    log(`      ⚠️ Origin Private File System not available`, 'warning');
+                }
+                
+                // Method 2: Check if WebLLM uses Cache API
+                if ('caches' in window) {
+                    log(`      💾 Cache API available`, 'info');
+                    const cacheNames = await caches.keys();
+                    const modelCaches = cacheNames.filter(name => 
+                        name.toLowerCase().includes(modelId.toLowerCase()) ||
+                        name.toLowerCase().includes('webllm') ||
+                        name.toLowerCase().includes('model')
+                    );
+                    
+                    if (modelCaches.length > 0) {
+                        log(`      🎯 Found model-related caches: ${modelCaches.join(', ')}`, 'success');
+                        for (const cacheName of modelCaches) {
+                            await inspectCache(cacheName);
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                log(`      ❌ Error checking alternative storage: ${error.message}`, 'error');
+            }
+        }
+
+        async function searchForModelFiles(directory, modelId) {
+            try {
+                // This is a simplified search - in reality, we'd need to iterate through directories
+                log(`         🔍 Searching for model files in directory...`, 'info');
+                
+                // Try common file patterns
+                const commonFiles = [
+                    `${modelId}.bin`,
+                    `${modelId}.weights`,
+                    `${modelId}.model`,
+                    'model.bin',
+                    'weights.bin',
+                    'model.data'
+                ];
+                
+                for (const fileName of commonFiles) {
+                    try {
+                        // Note: This would require proper directory iteration in a real implementation
+                        log(`            🔍 Looking for: ${fileName}`, 'info');
+                    } catch (error) {
+                        // Ignore file not found errors
+                    }
+                }
+                
+            } catch (error) {
+                log(`         ❌ Error searching files: ${error.message}`, 'error');
+            }
+        }
+
+        async function inspectCache(cacheName) {
+            try {
+                const cache = await caches.open(cacheName);
+                const requests = await cache.keys();
+                
+                log(`         💾 Cache: ${cacheName} (${requests.length} items)`, 'info');
+                
+                for (const request of requests.slice(0, 5)) {
+                    try {
+                        const response = await cache.match(request);
+                        if (response) {
+                            const blob = await response.blob();
+                            log(`            📦 ${request.url}: ${blob.size} bytes`, 'info');
+                        }
+                    } catch (error) {
+                        log(`            ❌ Error getting cache item: ${error.message}`, 'error');
+                    }
+                }
+                
+            } catch (error) {
+                log(`         ❌ Error inspecting cache: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkFileSystemAPI() {
+            log("\n=== 📁 FILE SYSTEM API INVESTIGATION ===", 'info');
+            
+            try {
+                if ('storage' in navigator && 'getDirectory' in navigator.storage) {
+                    log("✅ Origin Private File System is available", 'success');
+                    
+                    try {
+                        const root = await navigator.storage.getDirectory();
+                        log("✅ Got root directory", 'success');
+                        
+                        // Try to get directory handle and check size
+                        await investigateFileSystemDirectory(root);
+                        
+                    } catch (error) {
+                        log(`❌ Error accessing file system: ${error.message}`, 'error');
+                    }
+                } else {
+                    log("⚠️ Origin Private File System not available", 'warning');
+                }
+                
+                // Check for other file system APIs
+                if ('showDirectoryPicker' in window) {
+                    log("✅ File System Access API available", 'success');
+                }
+                
+                if ('launchQueue' in window && 'launchQueue' in window) {
+                    log("✅ File Handling API available", 'success');
+                }
+                
+            } catch (error) {
+                log(`❌ Error checking file system APIs: ${error.message}`, 'error');
+            }
+        }
+
+        async function investigateFileSystemDirectory(directory) {
+            try {
+                log("🔍 Investigating file system directory...", 'info');
+                
+                // Try to get usage and quota
+                if ('estimate' in navigator.storage) {
+                    const estimate = await navigator.storage.estimate();
+                    log(`📊 File system usage: ${formatBytes(estimate.usage || 0)}`, 'info');
+                    log(`📊 File system quota: ${formatBytes(estimate.quota || 0)}`, 'info');
+                }
+                
+                // Note: Full directory iteration would require more complex implementation
+                log("📝 Note: Full directory iteration requires more complex implementation", 'info');
+                
+            } catch (error) {
+                log(`❌ Error investigating directory: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkWebAssembly() {
+            log("\n=== 🧬 WEBASSEMBLY INVESTIGATION ===", 'info');
+            
+            try {
+                // Check if WebAssembly is available
+                if (typeof WebAssembly === 'undefined') {
+                    log("⚠️ WebAssembly not available", 'warning');
+                    return;
+                }
+                
+                log("✅ WebAssembly is available", 'success');
+                
+                // Check WebAssembly memory
+                if (WebAssembly.Memory) {
+                    log("✅ WebAssembly.Memory available", 'success');
+                    
+                    // Try to check if there are any large memory instances
+                    log("🔍 Checking for large WebAssembly memory instances...", 'info');
+                    
+                    // Note: This would require access to WebAssembly instances
+                    log("📝 Note: WebAssembly instance inspection requires access to running instances", 'info');
+                }
+                
+                // Check for WebAssembly.Module and other features
+                if (WebAssembly.Module) {
+                    log("✅ WebAssembly.Module available", 'success');
+                }
+                
+                if (WebAssembly.Instance) {
+                    log("✅ WebAssembly.Instance available", 'success');
+                }
+                
+                // Check for streaming compilation
+                if (WebAssembly.compileStreaming) {
+                    log("✅ WebAssembly.compileStreaming available", 'success');
+                }
+                
+            } catch (error) {
+                log(`❌ Error checking WebAssembly: ${error.message}`, 'error');
+            }
+        }
+
+        async function analyzeStorageQuota() {
+            log("\n=== 📊 STORAGE QUOTA ANALYSIS ===", 'info');
+            
+            try {
+                if ('storage' in navigator && 'estimate' in navigator.storage) {
+                    const estimate = await navigator.storage.estimate();
+                    
+                    log("📊 Storage Quota Breakdown:", 'info');
+                    log(`   💾 Total Usage: ${formatBytes(estimate.usage || 0)}`, 'success');
+                    log(`   📦 Total Quota: ${formatBytes(estimate.quota || 0)}`, 'info');
+                    log(`   📊 Usage Percentage: ${((estimate.usage || 0) / (estimate.quota || 1) * 100).toFixed(2)}%`, 'info');
+                    
+                    if (estimate.usageDetails) {
+                        log("📋 Usage Details:", 'info');
+                        Object.entries(estimate.usageDetails).forEach(([type, size]) => {
+                            log(`   📦 ${type}: ${formatBytes(size)}`, 'info');
+                        });
+                    }
+                    
+                    // Analyze where the 2.65GB is allocated
+                    const indexedDBUsage = estimate.usageDetails?.indexedDB || 0;
+                    const otherUsage = (estimate.usage || 0) - indexedDBUsage;
+                    
+                    log("🔍 Storage Analysis:", 'info');
+                    log(`   🗄️ IndexedDB: ${formatBytes(indexedDBUsage)} (${((indexedDBUsage / (estimate.usage || 1)) * 100).toFixed(1)}%)`, 'success');
+                    log(`   🔄 Other Storage: ${formatBytes(otherUsage)} (${((otherUsage / (estimate.usage || 1)) * 100).toFixed(1)}%)`, 'info');
+                    
+                    if (indexedDBUsage > 0) {
+                        log("🎯 The 2.65GB is likely stored in IndexedDB using WebLLM's custom format", 'success');
+                        log("📝 WebLLM might be storing model data directly in IndexedDB without traditional object stores", 'info');
+                    }
+                    
+                } else {
+                    log("⚠️ Storage estimate API not available", 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ Error analyzing storage quota: ${error.message}`, 'error');
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Auto-run on page load
+        window.addEventListener('load', () => {
+            setTimeout(investigateWebLLMStorage, 1000);
+        });
+    </script>
+</body>
+</html>

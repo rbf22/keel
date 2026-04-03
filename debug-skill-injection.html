@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Skill Injection</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .log { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e8; color: #2e7d32; }
+        .debug { background: #fff3e0; color: #ef6c00; }
+    </style>
+</head>
+<body>
+    <h1>Debug Skill Injection</h1>
+    <button onclick="testSkillInjection()">Test Skill Injection</button>
+    <button onclick="testSkillSelector()">Test Skill Selector Directly</button>
+    <button onclick="clearLogs()">Clear Logs</button>
+    <div id="logs"></div>
+
+    <script>
+        function log(message, type = 'log') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            logs.appendChild(div);
+            div.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        async function testSkillInjection() {
+            log('Starting skill injection test...', 'debug');
+            
+            try {
+                // Test if we can access the skills engine
+                const response = await fetch('/api/skills', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    const skills = await response.json();
+                    log(`Skills engine response: ${JSON.stringify(skills, null, 2)}`, 'success');
+                } else {
+                    log(`Skills engine error: ${response.status} ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                log(`Error testing skill injection: ${error.message}`, 'error');
+            }
+        }
+
+        async function testSkillSelector() {
+            log('Testing skill selector directly...', 'debug');
+            
+            try {
+                // Simulate the skill selector logic with debug info
+                const task = "what is the difference between cats and dogs?";
+                const availableSkills = [
+                    'python-coding', 'data-analysis', 'research', 'quality-review', 
+                    'task-planning', 'execution-analyzer', 'knowledge-manager'
+                ];
+                
+                log(`Task: "${task}"`, 'debug');
+                log(`Available skills: ${availableSkills.join(', ')}`, 'debug');
+                
+                // Test the research detection logic
+                const taskLower = task.toLowerCase();
+                const researchKeywords = ['research', 'find', 'search', 'investigate', 'lookup', 'information', 
+                                       'what is', 'what are', 'difference between', 'compare', 'versus', 'vs',
+                                       'how much', 'how many', 'when did', 'where is', 'who is', 'why does'];
+                const questionPatterns = ['what is the', 'what are the', 'difference between', 'how much', 
+                                           'how many', 'compare', 'versus', 'vs'];
+                
+                let researchScore = 0.5;
+                let reasoning = [];
+                
+                // Check for question patterns
+                const hasQuestionPattern = questionPatterns.some(pattern => taskLower.includes(pattern));
+                if (hasQuestionPattern) {
+                    researchScore += 0.5;
+                    reasoning.push('factual question detected');
+                    log(`✅ Question pattern detected: ${questionPatterns.filter(p => taskLower.includes(p)).join(', ')}`, 'success');
+                }
+                
+                // Check for research keywords
+                const hasResearchKeywords = researchKeywords.some(keyword => taskLower.includes(keyword));
+                if (hasResearchKeywords) {
+                    researchScore += 0.3;
+                    reasoning.push('information gathering required');
+                    log(`✅ Research keywords detected: ${researchKeywords.filter(k => taskLower.includes(k)).slice(0, 5).join(', ')}`, 'success');
+                }
+                
+                // Specific factual question indicators
+                const factualIndicators = ['weight', 'height', 'size', 'cost', 'price', 'age'];
+                const hasFactualIndicators = factualIndicators.some(indicator => taskLower.includes(indicator));
+                if (hasFactualIndicators) {
+                    researchScore += 0.2;
+                    reasoning.push('quantitative factual question');
+                    log(`✅ Factual indicators: ${factualIndicators.filter(i => taskLower.includes(i)).join(', ')}`, 'success');
+                }
+                
+                // General knowledge questions
+                if (taskLower.startsWith('what') || taskLower.startsWith('how') || taskLower.startsWith('when')) {
+                    researchScore += 0.2;
+                    reasoning.push('general knowledge question');
+                    log(`✅ General knowledge question pattern detected`, 'success');
+                }
+                
+                const finalScore = Math.min(researchScore, 1.0);
+                const selectedSkill = finalScore > 0.7 ? 'research' : 'python-coding';
+                
+                log(`Final score: ${finalScore.toFixed(2)}`, 'debug');
+                log(`Selected skill: ${selectedSkill}`, selectedSkill === 'research' ? 'success' : 'error');
+                log(`Reasoning: ${reasoning.join('; ')}`, 'debug');
+                
+                const status = selectedSkill === 'research' ? '✅ PASS' : '❌ FAIL';
+                log(`Test result: ${status}`, selectedSkill === 'research' ? 'success' : 'error');
+                
+            } catch (error) {
+                log(`Error testing skill selector: ${error.message}`, 'error');
+            }
+        }
+
+        // Auto-run skill selector test on page load
+        window.addEventListener('load', () => {
+            setTimeout(testSkillSelector, 1000);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MLC Binary WASM Models</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .model { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 3px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d3d9e2; border-color: #b3b9c7; }
+        .testing { background-color: #fff3cd; border-color: #ffeaa7; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto; max-height: 200px; }
+        button { padding: 8px 12px; cursor: pointer; margin: 5px; }
+        .wasm-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+        .code-output { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 5px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>🔍 MLC Binary WASM Models</h1>
+    
+    <div class="section">
+        <h2>📦 Available Versions</h2>
+        <button onclick="checkVersions()">Check Latest Versions</button>
+        <div id="versions"></div>
+    </div>
+    
+    <div class="section">
+        <h2>🤖 Available WASM Models</h2>
+        <button onclick="checkLatestModels()">Check Latest Models (v0_2_80)</button>
+        <div id="models"></div>
+    </div>
+    
+    <div class="section">
+        <h2>📋 Generated Model Config</h2>
+        <button onclick="generateModelConfig()">Generate Model Configuration</button>
+        <div id="config"></div>
+    </div>
+    
+    <script>
+        const versionsDiv = document.getElementById('versions');
+        const modelsDiv = document.getElementById('models');
+        const configDiv = document.getElementById('config');
+        
+        // Base URL for MLC binary repository
+        const baseUrl = 'https://api.github.com/repos/mlc-ai/binary-mlc-llm-libs/contents/web-llm-models';
+        
+        window.checkVersions = async function() {
+            versionsDiv.innerHTML = '<p>🔍 Checking available versions...</p>';
+            
+            try {
+                const response = await fetch(baseUrl);
+                const contents = await response.json();
+                
+                // Filter for directories (versions) and sort
+                const versions = contents
+                    .filter(item => item.type === 'dir' && item.name.match(/^v\d_\d_\d+$/))
+                    .sort((a, b) => b.name.localeCompare(a.name)); // Sort descending
+                
+                versionsDiv.innerHTML = `
+                    <h3>📦 Found ${versions.length} versions:</h3>
+                    <div class="wasm-list">
+                        ${versions.map(v => `
+                            <div class="model info">
+                                <strong>📁 ${v.name}</strong>
+                                <p>Updated: ${new Date(v.updated_at).toLocaleString()}</p>
+                                <button onclick="checkModelsInVersion('${v.name}')">Check Models</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                
+                // Highlight latest version
+                if (versions.length > 0) {
+                    const latest = versions[0];
+                    versionsDiv.innerHTML += `<h3>🎯 Latest Version: <strong>${latest.name}</strong></h3>`;
+                }
+                
+            } catch (error) {
+                versionsDiv.innerHTML = `<div class="error">❌ Error checking versions: ${error.message}</div>`;
+            }
+        };
+        
+        window.checkModelsInVersion = async function(version) {
+            modelsDiv.innerHTML = `<p>🔍 Checking models in ${version}...</p>`;
+            
+            try {
+                const response = await fetch(`${baseUrl}/${version}`);
+                const contents = await response.json();
+                
+                // Filter for WASM files
+                const wasmFiles = contents
+                    .filter(item => item.type === 'file' && item.name.endsWith('.wasm'))
+                    .sort((a, b) => a.name.localeCompare(b.name));
+                
+                modelsDiv.innerHTML = `
+                    <h3>🤖 Found ${wasmFiles.length} WASM files in ${version}:</h3>
+                    <div class="wasm-list">
+                        ${wasmFiles.map(file => `
+                            <div class="model info">
+                                <strong>📦 ${file.name}</strong>
+                                <p>Size: ${(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                                <p>Updated: ${new Date(file.updated_at).toLocaleString()}</p>
+                                <p><code>https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/${version}/${file.name}</code></p>
+                                <button onclick="testWasmFile('${version}', '${file.name}', '${file.size}')">Test WASM</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                
+                // Store for config generation
+                window.currentWasmFiles = wasmFiles;
+                window.currentVersion = version;
+                
+            } catch (error) {
+                modelsDiv.innerHTML = `<div class="error">❌ Error checking models: ${error.message}</div>`;
+            }
+        };
+        
+        window.checkLatestModels = async function() {
+            await checkModelsInVersion('v0_2_80');
+        };
+        
+        window.testWasmFile = async function(version, filename, expectedSize) {
+            const wasmUrl = `https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/${version}/${filename}`;
+            
+            const testDiv = document.createElement('div');
+            testDiv.className = 'model testing';
+            testDiv.innerHTML = `
+                <h4>🧪 Testing ${filename}</h4>
+                <p><strong>Status:</strong> Testing...</p>
+            `;
+            modelsDiv.appendChild(testDiv);
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch(wasmUrl, { method: 'HEAD' });
+                const endTime = Date.now();
+                
+                if (response.ok) {
+                    const actualSize = parseInt(response.headers.get('content-length')) || 0;
+                    testDiv.className = 'model success';
+                    testDiv.innerHTML = `
+                        <h4>✅ ${filename}</h4>
+                        <p><strong>Status:</strong> ${response.status} ${response.statusText}</p>
+                        <p><strong>Time:</strong> ${endTime - startTime}ms</p>
+                        <p><strong>Size:</strong> ${(actualSize / 1024 / 1024).toFixed(2)} MB</p>
+                        <p><strong>Expected:</strong> ${(expectedSize / 1024 / 1024).toFixed(2)} MB</p>
+                        ${actualSize === parseInt(expectedSize) ? '✅ Size matches' : '⚠️ Size mismatch'}
+                    `;
+                } else {
+                    testDiv.className = 'model error';
+                    testDiv.innerHTML = `
+                        <h4>❌ ${filename}</h4>
+                        <p><strong>Error:</strong> ${response.status} ${response.statusText}</p>
+                    `;
+                }
+            } catch (error) {
+                testDiv.className = 'model error';
+                testDiv.innerHTML = `
+                    <h4>❌ ${filename}</h4>
+                    <p><strong>Error:</strong> ${error.message}</p>
+                `;
+            }
+        };
+        
+        window.generateModelConfig = async function() {
+            if (!window.currentWasmFiles) {
+                configDiv.innerHTML = '<div class="error">❌ Please check models first</div>';
+                return;
+            }
+            
+            const version = window.currentVersion;
+            const wasmFiles = window.currentWasmFiles;
+            
+            // Generate TypeScript config
+            const config = wasmFiles.map(file => {
+                const modelId = file.name.replace('.wasm', '');
+                return {
+                    model_id: modelId,
+                    model: `https://huggingface.co/mlc-ai/${modelId}/resolve/main/`,
+                    model_lib: `https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/${version}/${file.name}`,
+                    vram_required_MB: 0, // Will need to be determined
+                    required_features: [],
+                    recommended_config: {
+                        temperature: 0.7,
+                        top_p: 0.9,
+                        repetition_penalty: 1.0
+                    }
+                };
+            });
+            
+            configDiv.innerHTML = `
+                <h3>📋 Generated Model Configuration for ${version}</h3>
+                <p>Copy this TypeScript configuration into <code>src/llm/models.ts</code>:</p>
+                <div class="code-output">
+<pre><code>export const OFFICIAL_MODEL_LIST = [
+${config.map(m => `  {
+    model_id: "${m.model_id}",
+    model: "${m.model}",
+    model_lib: "${m.model_lib}",
+    vram_required_MB: ${m.vram_required_MB},
+    required_features: ${JSON.stringify(m.required_features)},
+    recommended_config: ${JSON.stringify(m.recommended_config, null, 2)}
+  }`).join(',\n')}
+];</code></pre>
+                </div>
+                <p><strong>Total Models:</strong> ${config.length}</p>
+                <button onclick="copyConfigToClipboard()">Copy to Clipboard</button>
+            `;
+            
+            window.generatedConfig = config;
+        };
+        
+        window.copyConfigToClipboard = function() {
+            if (window.generatedConfig) {
+                const configText = `export const OFFICIAL_MODEL_LIST = [
+${window.generatedConfig.map(m => `  {
+    model_id: "${m.model_id}",
+    model: "${m.model}",
+    model_lib: "${m.model_lib}",
+    vram_required_MB: ${m.vram_required_MB},
+    required_features: ${JSON.stringify(m.required_features)},
+    recommended_config: ${JSON.stringify(m.recommended_config, null, 2)}
+  }`).join(',\n')}
+];`;
+                
+                navigator.clipboard.writeText(configText).then(() => {
+                    alert('✅ Configuration copied to clipboard!');
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                });
+            }
+        };
+        
+        // Auto-check versions on load
+        window.addEventListener('load', () => {
+            setTimeout(checkVersions, 1000);
+        });
+    </script>
+</body>
+</html>
